@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install Typst
+        run: ./scripts/install-typst.sh
+
+      # Restrict to the test projects rather than the full solution: the samples
+      # project pulls in a package with a known advisory (NU1903) that's unrelated
+      # to running the tests and would otherwise fail restore. dotnet only accepts
+      # one project per invocation, so each test project is handled separately.
+      - name: Restore
+        run: |
+          dotnet restore tests/TypstRender.Service.Tests/TypstRender.Service.Tests.csproj
+          dotnet restore tests/TypstRender.Client.Tests/TypstRender.Client.Tests.csproj
+
+      - name: Build
+        run: |
+          dotnet build tests/TypstRender.Service.Tests/TypstRender.Service.Tests.csproj --no-restore --configuration Release
+          dotnet build tests/TypstRender.Client.Tests/TypstRender.Client.Tests.csproj --no-restore --configuration Release
+
+      - name: Test
+        run: |
+          source ./scripts/install-typst.sh.env
+          dotnet test tests/TypstRender.Service.Tests/TypstRender.Service.Tests.csproj --no-build --configuration Release --logger "trx;LogFileName=service-tests.trx"
+          dotnet test tests/TypstRender.Client.Tests/TypstRender.Client.Tests.csproj --no-build --configuration Release --logger "trx;LogFileName=client-tests.trx"
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: "**/*.trx"
