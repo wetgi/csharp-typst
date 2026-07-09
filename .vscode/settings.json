@@ -1,0 +1,13 @@
+{
+  // Tinymist (Typst language server): treat the sample's templates folder as the
+  // Typst root so absolute imports like `#import "/shared/styles.typ"` resolve
+  // in editor previews exactly as they do in the rendered bundle.
+  "tinymist.rootPath": "${workspaceFolder}/samples/TypstRender.Sample/templates",
+  "files.exclude": {
+    "**/.git": true,
+    "**/build": true,
+    "**/bin": true,
+    "**/obj": true,
+  },
+  "dotnet.defaultSolution": "TypstRender.slnx"
+}

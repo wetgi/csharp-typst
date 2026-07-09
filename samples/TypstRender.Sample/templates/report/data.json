@@ -1,0 +1,14 @@
+{
+  "title": "Half-year revenue report",
+  "period": "January – June 2026 — Acme Consulting SARL",
+  "summary": "Revenue grew steadily across the first half of the year, driven by the rendering-platform engagements signed in January. The chart and table below are produced from the same data: the table is laid out by the template, while the chart is drawn as an SVG by the calling C# code at render time and shipped with the bundle.",
+  "currency": "EUR",
+  "chart": [
+    { "label": "Jan", "value": 48200 },
+    { "label": "Feb", "value": 52900 },
+    { "label": "Mar", "value": 61400 },
+    { "label": "Apr", "value": 58300 },
+    { "label": "May", "value": 67150 },
+    { "label": "Jun", "value": 73800 }
+  ]
+}

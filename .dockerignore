@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/out/
+.dotnet/
+.git/
+.vs/
+.vscode/
+.idea/
+samples/
+**/*.user

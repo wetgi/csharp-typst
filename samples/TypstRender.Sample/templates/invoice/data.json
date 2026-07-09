@@ -1,0 +1,48 @@
+{
+  "invoiceNumber": "INV-2026-0042234",
+  "issueDate": "2026-05-20",
+  "dueDate": "2026-06-19",
+  "currency": "EUR",
+  "seller": {
+    "name": "Acme Consulting SARL",
+    "address": "1 rue de la Paix\n1234 Luxembourg",
+    "vatId": "LU12345678"
+  },
+  "buyer": {
+    "name": "Globex Corporation",
+    "address": "2 avenue des Champs\n75008 Paris, France",
+    "vatId": "FR98765432109"
+  },
+  "lineItems": [
+    {
+      "description": "Architecture consulting",
+      "quantity": 10,
+      "unitPrice": 120.00,
+      "vatRate": 0.17
+    },
+    {
+      "description": "On-site workshop",
+      "quantity": 1,
+      "unitPrice": 950.00,
+      "vatRate": 0.17
+    },
+    {
+      "description": "Travel reimbursement",
+      "quantity": 1,
+      "unitPrice": 220.50,
+      "vatRate": 0.00
+    },
+    {
+      "description": "Hotel accommodation",
+      "quantity": 1,
+      "unitPrice": 450.00,
+      "vatRate": 0.00
+    }
+  ],
+  "discount": {
+    "label": "Loyalty",
+    "amount": 50.00
+  },
+  "notes": "Thank you for your business. Payment by bank transfer within 30 days.",
+  "paidAt": "2026-05-22"
+}

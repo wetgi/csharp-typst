@@ -1,0 +1,19 @@
+{
+  "sender": {
+    "name": "Acme Consulting SARL",
+    "address": "1 rue de la Paix\n1234 Luxembourg"
+  },
+  "recipient": {
+    "name": "Globex Corporation",
+    "address": "2 avenue des Champs\n75008 Paris, France"
+  },
+  "date": "2026-06-10",
+  "subject": "Follow-up on the May architecture workshop",
+  "paragraphs": [
+    "Thank you for hosting our team during the architecture workshop in May. We appreciated the open discussion and the clear picture your engineers gave us of the current platform.",
+    "As agreed, we have summarised the findings and recommendations in a separate report, which you will receive within the next two weeks. The highest-priority item remains the migration of the rendering pipeline to a containerised service.",
+    "Please do not hesitate to contact us if you have questions in the meantime, or if you would like to schedule a follow-up session with the wider team."
+  ],
+  "closing": "Kind regards,",
+  "signatureName": "Jane Martin, Partner"
+}

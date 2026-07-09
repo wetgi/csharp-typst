@@ -1,0 +1,20 @@
+services:
+  typst-render:
+    container_name: typst-render-service
+    build:
+      context: ..
+      dockerfile: src/TypstRender.Service/Dockerfile
+      args:
+        TYPST_VERSION: "0.15.0"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_HTTP_PORTS: "8080"
+      Render__TypstBinaryPath: typst
+      Render__TimeoutSeconds: "30"
+      Render__MaxUploadBytes: "20971520"
+      Render__MaxConcurrency: "0"
+      Render__QueueTimeoutSeconds: "10"
+      Render__ShutdownTimeoutSeconds: "30"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

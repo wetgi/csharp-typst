@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TypstRender.Contracts/TypstRender.Contracts.csproj" />
+    <Project Path="src/TypstRender.Service/TypstRender.Service.csproj" />
+    <Project Path="src/TypstRender.Client/TypstRender.Client.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/TypstRender.Sample/TypstRender.Sample.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TypstRender.Service.Tests/TypstRender.Service.Tests.csproj" />
+    <Project Path="tests/TypstRender.Client.Tests/TypstRender.Client.Tests.csproj" />
+  </Folder>
+</Solution>
