@@ -26,8 +26,11 @@
     <PackageReference Include="System.Text.Json" Version="9.0.0" />
   </ItemGroup>
 
+  <!-- Compiled directly in rather than referenced as a project/package: the published
+       client must be self-contained, with no dependency on a TypstRender.Contracts
+       package that's never published on its own. -->
   <ItemGroup>
-    <ProjectReference Include="..\TypstRender.Contracts\TypstRender.Contracts.csproj" />
+    <Compile Include="..\TypstRender.Contracts\RenderProtocol.cs" Link="Internal\RenderProtocol.cs" />
   </ItemGroup>
 
   <ItemGroup>
