@@ -20,7 +20,7 @@ jobs:
           global-json-file: global.json
 
       - name: Install Typst
-        run: ./scripts/install-typst.sh
+        run: bash ./scripts/install-typst.sh
 
       # Restrict to the test projects rather than the full solution: the samples
       # project pulls in a package with a known advisory (NU1903) that's unrelated
