@@ -3,7 +3,8 @@
 Render PDFs with [Typst](https://typst.app) from any .NET project — **without**
 shipping the Typst binary in every project. Rendering runs in a **container**
 (ASP.NET 10 minimal-API service + typst + libre fonts) that your C# app calls over
-a private network on a slim **Alpine** base. Projects reference a thin **NuGet client**.
+a private network on a slim **Alpine** base. Projects reference a thin
+**[NuGet client](https://www.nuget.org/packages/TypstRender.Client)**.
 
 ## Architecture
 
@@ -38,7 +39,7 @@ never in your project or the NuGet.
 | Path | Role |
 | --- | --- |
 | `src/TypstRender.Service` | The container: an ASP.NET 10 minimal-API service (`POST /render`) that unzips a bundle, runs `typst`, and returns the PDF. Caps concurrency, shuts down gracefully, logs each render. The binary is installed onto `PATH` by the Dockerfile — not committed. |
-| `src/TypstRender.Client` | The NuGet package. `HttpClient`-based SDK (`ITypstRenderClient`) that scans a template's import closure, zips the required files and posts them. |
+| [`src/TypstRender.Client`](src/TypstRender.Client/README.md) | The [NuGet package](https://www.nuget.org/packages/TypstRender.Client). `HttpClient`-based SDK (`ITypstRenderClient`) that scans a template's import closure, zips the required files and posts them. See its [package README](src/TypstRender.Client/README.md) for the full client API. |
 | `src/TypstRender.Contracts` | Wire-protocol constants shared by client and service. |
 | `samples/TypstRender.Sample` | One generic showcase app that renders **any** template under `templates/<name>/` via the client. Drop in a folder to add a template — no code changes. |
 | `tests/TypstRender.Client.Tests` | Unit tests for the client's bundling/scanning (no typst needed). |
@@ -113,6 +114,12 @@ The container is intended to sit on a private network reachable only by its call
 so it does **no authentication** — put a reverse proxy in front if you expose it.
 
 ## Using the client
+
+The client ships on nuget.org as
+[**TypstRender.Client**](https://www.nuget.org/packages/TypstRender.Client) — install it
+with `dotnet add package TypstRender.Client`. The snippets below cover the common cases;
+the [package README](src/TypstRender.Client/README.md) documents the full client API
+(streaming, error handling, bundle inspection, and all options).
 
 ```csharp
 services.AddTypstRenderClient(o =>
