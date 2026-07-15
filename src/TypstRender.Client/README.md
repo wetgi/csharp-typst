@@ -1,5 +1,10 @@
 # TypstRender.Client
 
+> This package is one half of the system. The other half is the rendering service — an
+> ASP.NET minimal-API container wrapping the Typst CLI — published as a ready-to-run image
+> at `ghcr.io/wetgi/typst-render-service` (or build it from the repo). See the
+> [full README](https://github.com/wetgi/csharp-typst) for the service, Dockerfile, and architecture.
+
 A thin, `HttpClient`-based .NET SDK for rendering PDFs with [Typst](https://typst.app)
 — **without** shipping the Typst binary in your app. Your project references this
 package; the actual rendering runs in a companion **container service** that owns the
@@ -12,10 +17,6 @@ files that render needs, posts them, and hands you back the PDF bytes.
 - **DI-first** — registers as a typed `HttpClient` via `IHttpClientFactory`.
 - **Targets** `net10.0` and `netstandard2.0`.
 
-> This package is one half of the system. The rendering service (an ASP.NET minimal-API
-> container wrapping the Typst CLI) is not on NuGet — build it from the repo. See the
-> [full README](https://github.com/wetgi/csharp-typst) for the service, Dockerfile, and architecture.
-
 ## Install
 
 ```bash
@@ -24,7 +25,13 @@ dotnet add package TypstRender.Client
 
 ## Quick start
 
-Register the client and point it at your running service and template folder:
+Start the rendering service — pull the published image (no local Typst needed):
+
+```bash
+docker run -p 8080:8080 ghcr.io/wetgi/typst-render-service:latest
+```
+
+Then register the client and point it at the service and your template folder:
 
 ```csharp
 services.AddTypstRenderClient(o =>
@@ -106,22 +113,22 @@ catch (TypstRenderException ex) when (ex.StatusCode == 422)
 }
 ```
 
-| Status | Meaning |
-| --- | --- |
-| `422` | Typst compile error — `Detail` is the compiler stderr. |
-| `400` | Malformed bundle. |
-| `413` | Uploaded bundle exceeded the service's max size. |
-| `503` | Service at capacity (concurrency limit). |
-| `504` | Render timed out. |
+| Status | Meaning                                                |
+| ------ | ------------------------------------------------------ |
+| `422`  | Typst compile error — `Detail` is the compiler stderr. |
+| `400`  | Malformed bundle.                                      |
+| `413`  | Uploaded bundle exceeded the service's max size.       |
+| `503`  | Service at capacity (concurrency limit).               |
+| `504`  | Render timed out.                                      |
 
 ## Options
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `BaseAddress` | — | Base URL of the rendering service. |
-| `TemplateRoot` | — | Default folder shipped as the Typst `--root`; entries are addressed relative to it. |
-| `Timeout` | 60s | Overall request timeout. |
-| `BundleMode` | `Auto` | `Auto` ships the entry's import closure; `Full` ships the whole root. |
+| Option         | Default | Meaning                                                                             |
+| -------------- | ------- | ----------------------------------------------------------------------------------- |
+| `BaseAddress`  | —       | Base URL of the rendering service.                                                  |
+| `TemplateRoot` | —       | Default folder shipped as the Typst `--root`; entries are addressed relative to it. |
+| `Timeout`      | 60s     | Overall request timeout.                                                            |
+| `BundleMode`   | `Auto`  | `Auto` ships the entry's import closure; `Full` ships the whole root.               |
 
 ## License
 

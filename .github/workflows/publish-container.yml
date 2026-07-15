@@ -1,0 +1,87 @@
+name: Publish container image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      typst_version:
+        description: "Typst version to bake into the image (overrides the default below)"
+        required: false
+        type: string
+
+# Cancel an in-flight run when a newer commit lands on the same ref.
+concurrency:
+  group: publish-container-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # ghcr.io/<owner>/typst-render-service — the service image the client talks to.
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/typst-render-service
+  # Pinned Typst version baked into the image. Bump here — no Dockerfile edit
+  # needed (this overrides the Dockerfile's ARG default). A manual run can
+  # override it further via the workflow_dispatch input above.
+  TYPST_VERSION: "0.15.0"
+
+jobs:
+  publish-container:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write # push to GitHub Container Registry
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # No credentials on pull requests: forks can't get packages:write, and we
+      # only build (not push) PRs anyway.
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          # latest/edge track main; releases get immutable semver tags. Every
+          # build also gets a sha tag for precise rollbacks.
+          tags: |
+            type=edge,branch=main
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+          flavor: |
+            latest=false
+          labels: |
+            org.opencontainers.image.description=Typst rendering service (ASP.NET minimal API + typst CLI) for TypstRender.Client.
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          # Repo root is the build context: the Dockerfile COPYs from src/**.
+          context: .
+          file: src/TypstRender.Service/Dockerfile
+          # amd64 only: the Dockerfile pulls the x86_64-musl typst binary.
+          platforms: linux/amd64
+          # Don't push on PRs — build as a smoke test only.
+          push: ${{ github.event_name != 'pull_request' }}
+          build-args: |
+            TYPST_VERSION=${{ github.event.inputs.typst_version || env.TYPST_VERSION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -212,13 +212,29 @@ extension at the same root, so in-editor previews resolve `/shared/...` imports 
 
 ## Running the container
 
+Pull the pre-built image from the GitHub Container Registry (published by CI on every
+push to `main` and on `v*.*.*` release tags):
+
+```bash
+docker pull ghcr.io/wetgi/typst-render-service:latest   # or a release tag, e.g. :1.2.3
+docker run -p 8080:8080 ghcr.io/wetgi/typst-render-service:latest
+```
+
+Tags: `latest` and `edge` track `main`; release tags publish immutable `MAJOR.MINOR.PATCH`
+and `MAJOR.MINOR` images; every build is also tagged `sha-<commit>`.
+
+Or build it yourself from source:
+
 ```bash
 docker build -f src/TypstRender.Service/Dockerfile -t typst-render-service .
 docker run -p 8080:8080 typst-render-service
 ```
 
 The image builds the service, then downloads a pinned `TYPST_VERSION` (build arg) onto
-`PATH` alongside the libre fonts. No binary is committed to the repo.
+`PATH` alongside the libre fonts. No binary is committed to the repo. The published
+images pin the version set in `.github/workflows/publish-container.yml`; a local build
+uses the Dockerfile's `ARG TYPST_VERSION` default (override with
+`--build-arg TYPST_VERSION=...`).
 
 ### Configuration (`Render` section of appsettings, overridable via env, e.g. `Render__MaxConcurrency`)
 
