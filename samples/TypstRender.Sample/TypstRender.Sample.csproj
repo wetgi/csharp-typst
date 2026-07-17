@@ -10,7 +10,13 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
-    <ProjectReference Include="..\..\src\TypstRender.Client\TypstRender.Client.csproj" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
+
+    <!-- On development, we reference the client project directly. In production, we reference the
+    NuGet package. -->
+    <!-- <ProjectReference Include="..\..\src\TypstRender.Client\TypstRender.Client.csproj" />-->
+
+    <PackageReference Include="TypstRender.Client" Version="1.0.1" />
     <PackageReference Include="Scalar.AspNetCore" Version="2.16.3" />
   </ItemGroup>
 
