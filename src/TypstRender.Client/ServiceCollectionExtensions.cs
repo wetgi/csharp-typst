@@ -21,11 +21,6 @@ public static class ServiceCollectionExtensions
         {
             var options = sp.GetRequiredService<IOptions<TypstRenderClientOptions>>().Value;
 
-            if (options.BaseAddress is not null)
-            {
-                http.BaseAddress = options.BaseAddress;
-            }
-
             http.Timeout = options.Timeout;
         });
 

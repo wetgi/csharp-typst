@@ -88,6 +88,30 @@ public sealed class TypstRenderClientTests : IDisposable
     }
 
     [Fact]
+    public async Task RenderAsync_BaseAddressPathPrefix_IsPreserved()
+    {
+        WriteFile("letter/main.typ", "= Letter");
+
+        await CreateClient(o => o.BaseAddress = new Uri("http://typst-render.test/typst/")).RenderAsync("letter/main.typ");
+
+        Assert.Equal(
+            "http://typst-render.test/typst/render?entry=letter%2Fmain.typ",
+            _handler.LastRequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task RenderAsync_BaseAddressWithDoubleSlashPath_IsPreserved()
+    {
+        WriteFile("letter/main.typ", "= Letter");
+
+        await CreateClient(o => o.BaseAddress = new Uri("http://typst-render.test//typst/")).RenderAsync("letter/main.typ");
+
+        Assert.Equal(
+            "http://typst-render.test//typst/render?entry=letter%2Fmain.typ",
+            _handler.LastRequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
     public async Task RenderAsync_ExtraFiles_RideAlongWithDiskBundleAndSatisfyTheScanner()
     {
         // The template references a file that never exists on disk — it is

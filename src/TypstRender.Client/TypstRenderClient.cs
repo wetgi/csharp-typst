@@ -27,9 +27,13 @@ public sealed class TypstRenderClient : ITypstRenderClient
         _http = http;
         _options = options.Value;
 
-        if (_options.BaseAddress is not null && _http.BaseAddress is null)
+        if (_options.BaseAddress is not null)
         {
-            _http.BaseAddress = _options.BaseAddress;
+            _http.BaseAddress = EnsureTrailingSlash(_options.BaseAddress);
+        }
+        else if (_http.BaseAddress is not null)
+        {
+            _http.BaseAddress = EnsureTrailingSlash(_http.BaseAddress);
         }
     }
 
@@ -114,7 +118,7 @@ public sealed class TypstRenderClient : ITypstRenderClient
 
         using var httpRequest = new HttpRequestMessage(
             HttpMethod.Post,
-            RenderProtocol.RenderPath + BuildQuery(entry, dataJson is not null, request.Inputs))
+            RenderProtocol.RenderPath.TrimStart('/') + BuildQuery(entry, dataJson is not null, request.Inputs))
         {
             Content = content,
         };
@@ -346,6 +350,11 @@ public sealed class TypstRenderClient : ITypstRenderClient
 
         WriteEntry(archive, path, content);
     }
+
+    private static Uri EnsureTrailingSlash(Uri uri)
+        => uri.AbsolutePath.EndsWith('/')
+            ? uri
+            : new Uri(uri.AbsoluteUri + "/", UriKind.Absolute);
 
     /// <summary>
     /// Read-only stream over an HTTP response body that disposes the owning
