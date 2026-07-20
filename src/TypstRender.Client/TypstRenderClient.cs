@@ -352,7 +352,7 @@ public sealed class TypstRenderClient : ITypstRenderClient
     }
 
     private static Uri EnsureTrailingSlash(Uri uri)
-        => uri.AbsolutePath.EndsWith('/')
+        => uri.AbsolutePath.EndsWith("/", StringComparison.Ordinal)
             ? uri
             : new Uri(uri.AbsoluteUri + "/", UriKind.Absolute);
 
