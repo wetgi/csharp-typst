@@ -82,10 +82,15 @@ public static class SampleRenderEndpointExtensions
         }
         catch (TypstRenderException ex)
         {
+            // A short title and the service's own body as the detail: ex.Message
+            // already carries the Typst stderr, so using it as a title would put
+            // a multi-line compiler dump on one line.
             return Results.Problem(
-                title: ex.Message,
+                title: ex.IsCompileError
+                    ? $"Template '{templateName}' did not compile"
+                    : $"Rendering '{templateName}' failed",
                 detail: string.IsNullOrWhiteSpace(ex.Detail) ? ex.Message : ex.Detail,
-                statusCode: ex.StatusCode);
+                statusCode: ex.IsTransportFailure ? StatusCodes.Status502BadGateway : ex.StatusCode);
         }
     }
 }

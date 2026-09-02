@@ -8,9 +8,20 @@
 #
 set -euo pipefail
 
-TYPST_VERSION="${TYPST_VERSION:-0.15.0}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DOCKERFILE="${REPO_ROOT}/src/TypstRender.Service/Dockerfile"
 INSTALL_DIR="${REPO_ROOT}/.typst/bin"
+
+# The Dockerfile's ARG is the single source of truth for the pinned version, so a
+# local install, a container build and CI cannot drift apart. Override per-run
+# with TYPST_VERSION=... ./scripts/install-typst.sh
+DOCKERFILE_VERSION="$(sed -n 's/^ARG TYPST_VERSION=\(.*\)$/\1/p' "${DOCKERFILE}" | head -n 1)"
+if [ -z "${DOCKERFILE_VERSION}" ]; then
+  echo "Could not read ARG TYPST_VERSION from ${DOCKERFILE}" >&2
+  exit 1
+fi
+TYPST_VERSION="${TYPST_VERSION:-${DOCKERFILE_VERSION}}"
+echo "Typst version: ${TYPST_VERSION} (pinned in src/TypstRender.Service/Dockerfile)"
 
 if command -v typst >/dev/null 2>&1 && typst --version 2>/dev/null | grep -q "${TYPST_VERSION}"; then
   echo "typst ${TYPST_VERSION} already on PATH: $(command -v typst)"

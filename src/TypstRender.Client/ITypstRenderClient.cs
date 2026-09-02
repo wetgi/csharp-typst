@@ -1,51 +1,66 @@
 namespace TypstRender.Client;
 
 /// <summary>Client for the Typst rendering service.</summary>
+/// <remarks>
+/// Implementations are safe to use concurrently. A single
+/// <see cref="TypstRenderRequest"/> instance is not — it is read while the
+/// bundle is built, so give each concurrent render its own.
+/// </remarks>
 public interface ITypstRenderClient
 {
     /// <summary>
     /// Renders the template addressed by <paramref name="entry"/> (relative to the
     /// configured <see cref="TypstRenderClientOptions.TemplateRoot"/>, e.g.
-    /// <c>invoice/main.typ</c>). The client scans the entry's import closure,
-    /// bundles the required files, serializes <paramref name="data"/> to
-    /// <c>data.json</c> at the bundle root and exposes it via the <c>data-path</c>
-    /// input (templates read it with <c>sys.inputs.at("data-path")</c>).
+    /// <c>invoice/main.typ</c>), with no data file.
+    /// </summary>
+    /// <param name="entry">Entry <c>.typ</c> file, relative to the template root.</param>
+    /// <param name="cancellationToken">Token used to cancel the request.</param>
+    /// <returns>The rendered PDF bytes.</returns>
+    Task<byte[]> RenderAsync(string entry, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Renders the template addressed by <paramref name="entry"/>. The client
+    /// scans the entry's import closure, bundles the required files, serializes
+    /// <paramref name="data"/> to <c>data.json</c> at the bundle root and exposes
+    /// it via the <c>data-path</c> input (templates read it with
+    /// <c>sys.inputs.at("data-path")</c>).
     /// </summary>
     /// <param name="entry">Entry <c>.typ</c> file, relative to the template root.</param>
     /// <param name="data">Object serialized to <c>data.json</c>; <c>null</c> sends no data file.</param>
     /// <param name="cancellationToken">Token used to cancel the request.</param>
     /// <returns>The rendered PDF bytes.</returns>
-    Task<byte[]> RenderAsync(
-        string entry,
-        object? data = null,
-        CancellationToken cancellationToken = default);
+    Task<byte[]> RenderAsync(string entry, object? data, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Renders with full control over root, bundling, extra inputs, or an in-memory
     /// file set. See <see cref="TypstRenderRequest"/>.
     /// </summary>
-    Task<byte[]> RenderAsync(
-        TypstRenderRequest request,
-        CancellationToken cancellationToken = default);
+    Task<byte[]> RenderAsync(TypstRenderRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Streaming counterpart of <see cref="RenderAsync(string, object?, CancellationToken)"/>:
+    /// Streaming counterpart of <see cref="RenderAsync(string, CancellationToken)"/>:
     /// returns the PDF as a <see cref="Stream"/> the caller reads and disposes,
     /// instead of buffering the whole document into a <c>byte[]</c>. Dispose the
-    /// returned stream to release the underlying HTTP response.
+    /// returned stream to release the underlying HTTP response — it holds a
+    /// pooled connection until you do. Prefer <c>RenderToAsync</c> or
+    /// <c>RenderToFileAsync</c> (see <see cref="TypstRenderClientExtensions"/>)
+    /// when you are copying straight into another stream or to a file: they own
+    /// the response's lifetime, so they cannot leak it.
     /// </summary>
-    Task<Stream> RenderToStreamAsync(
-        string entry,
-        object? data = null,
-        CancellationToken cancellationToken = default);
+    Task<Stream> RenderToStreamAsync(string entry, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Streaming counterpart of <see cref="RenderAsync(string, object?, CancellationToken)"/>.
+    /// Dispose the returned stream to release the underlying HTTP response.
+    /// </summary>
+    Task<Stream> RenderToStreamAsync(string entry, object? data, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Streaming counterpart of <see cref="RenderAsync(TypstRenderRequest, CancellationToken)"/>.
     /// Dispose the returned stream to release the underlying HTTP response.
     /// </summary>
     Task<Stream> RenderToStreamAsync(
-        TypstRenderRequest request,
-        CancellationToken cancellationToken = default);
+        TypstRenderRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lists the templates discoverable under the configured
@@ -54,8 +69,8 @@ public interface ITypstRenderClient
     /// (shared modules, <c>fonts/</c>) are skipped. Names are root-relative,
     /// <c>'/'</c>-separated paths (e.g. <c>invoice</c>, <c>invoice/paid</c>),
     /// sorted ordinally. Returns an empty list when the root does not exist on
-    /// disk; throws <see cref="System.InvalidOperationException"/> when no root is
-    /// configured.
+    /// disk; throws <see cref="System.InvalidOperationException"/> when no root
+    /// is configured.
     /// </summary>
     /// <remarks>
     /// Each returned name addresses a template whose entry is <c>main.typ</c>; pass
@@ -73,8 +88,8 @@ public interface ITypstRenderClient
     /// A reference that does not exist on disk fails here with the chain of files
     /// that led to it, rather than as an opaque server error after a round-trip.
     /// Throws <see cref="System.ArgumentException"/> when <paramref name="entry"/>
-    /// is blank, <see cref="System.InvalidOperationException"/> when no template
-    /// root is configured, and <see cref="System.IO.DirectoryNotFoundException"/>
+    /// is blank or climbs out of the root, <see cref="System.InvalidOperationException"/>
+    /// when no template root is configured, and <see cref="System.IO.DirectoryNotFoundException"/>
     /// when the configured root does not exist on disk — note this differs from
     /// <see cref="GetTemplates"/>, which returns an empty list for a missing root.
     /// </summary>

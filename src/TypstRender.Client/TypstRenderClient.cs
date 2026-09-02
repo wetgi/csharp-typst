@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using TypstRender.Contracts;
 
@@ -20,28 +21,42 @@ public sealed class TypstRenderClient : ITypstRenderClient
 
     private readonly HttpClient _http;
     private readonly TypstRenderClientOptions _options;
+    private readonly Uri? _renderEndpoint;
 
     /// <summary>Creates a client over the given <see cref="HttpClient"/> and options.</summary>
+    /// <remarks>
+    /// Marked as the activator's constructor: the typed-client factory would
+    /// otherwise see two two-parameter constructors and report them ambiguous.
+    /// </remarks>
+    [ActivatorUtilitiesConstructor]
     public TypstRenderClient(HttpClient http, IOptions<TypstRenderClientOptions> options)
+        : this(http, (options ?? throw new ArgumentNullException(nameof(options))).Value)
     {
-        _http = http;
-        _options = options.Value;
+    }
 
-        if (_options.BaseAddress is not null)
-        {
-            _http.BaseAddress = EnsureTrailingSlash(_options.BaseAddress);
-        }
-        else if (_http.BaseAddress is not null)
-        {
-            _http.BaseAddress = EnsureTrailingSlash(_http.BaseAddress);
-        }
+    /// <summary>
+    /// Creates a client over the given <see cref="HttpClient"/> and options,
+    /// without going through <c>IOptions</c> — for a console app or a test that
+    /// does not have a DI container.
+    /// </summary>
+    public TypstRenderClient(HttpClient http, TypstRenderClientOptions options)
+    {
+        _http = http ?? throw new ArgumentNullException(nameof(http));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+
+        // Resolved once, and the injected HttpClient is left untouched: assigning
+        // BaseAddress on a client that has already sent a request throws, so a
+        // shared/static HttpClient used to make construction fail unpredictably.
+        var baseAddress = _options.BaseAddress ?? _http.BaseAddress;
+        _renderEndpoint = baseAddress is null ? null : BuildRenderEndpoint(baseAddress);
     }
 
     /// <inheritdoc />
-    public Task<byte[]> RenderAsync(
-        string entry,
-        object? data = null,
-        CancellationToken cancellationToken = default)
+    public Task<byte[]> RenderAsync(string entry, CancellationToken cancellationToken = default)
+        => RenderAsync(entry, data: null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<byte[]> RenderAsync(string entry, object? data, CancellationToken cancellationToken = default)
         => RenderAsync(new TypstRenderRequest { Entry = entry, Data = data }, cancellationToken);
 
     /// <inheritdoc />
@@ -52,14 +67,20 @@ public sealed class TypstRenderClient : ITypstRenderClient
         using var response = await SendRenderAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken)
             .ConfigureAwait(false);
 
+#if NET5_0_OR_GREATER
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+#else
         return await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+#endif
     }
 
     /// <inheritdoc />
+    public Task<Stream> RenderToStreamAsync(string entry, CancellationToken cancellationToken = default)
+        => RenderToStreamAsync(entry, data: null, cancellationToken);
+
+    /// <inheritdoc />
     public Task<Stream> RenderToStreamAsync(
-        string entry,
-        object? data = null,
-        CancellationToken cancellationToken = default)
+        string entry, object? data, CancellationToken cancellationToken = default)
         => RenderToStreamAsync(new TypstRenderRequest { Entry = entry, Data = data }, cancellationToken);
 
     /// <inheritdoc />
@@ -74,7 +95,11 @@ public sealed class TypstRenderClient : ITypstRenderClient
 
         try
         {
+#if NET5_0_OR_GREATER
+            var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+#else
             var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+#endif
             return new ResponseStream(stream, response);
         }
         catch
@@ -98,51 +123,90 @@ public sealed class TypstRenderClient : ITypstRenderClient
             throw new ArgumentNullException(nameof(request));
         }
 
-        if (string.IsNullOrWhiteSpace(request.Entry))
-        {
-            throw new ArgumentException("Entry must name a .typ file inside the bundle.", nameof(request));
-        }
+        var endpoint = _renderEndpoint ?? throw new InvalidOperationException(
+            $"No render service address configured. Set {nameof(TypstRenderClientOptions)}."
+                + $"{nameof(TypstRenderClientOptions.BaseAddress)} to the service URL, "
+                + "e.g. new Uri(\"http://localhost:8080\").");
 
-        var entry = request.Entry.Replace('\\', '/').TrimStart('/');
+        var entry = TemplateScanner.NormalizeEntry(request.Entry);
         var dataJson = request.Data is null
             ? null
             : JsonSerializer.SerializeToUtf8Bytes(request.Data, JsonOptions);
-        var extraFiles = NormalizeExtraFiles(request.ExtraFiles, hasData: dataJson is not null);
+        var extraFiles = NormalizeFileSet(
+            request.ExtraFiles,
+            $"{nameof(TypstRenderRequest)}.{nameof(TypstRenderRequest.ExtraFiles)}",
+            rejectDataFile: dataJson is not null);
 
         var zipBytes = request.Files is not null
-            ? BuildZip(request.Files, extraFiles, dataJson)
+            ? BuildZip(NormalizeSuppliedFiles(request, entry, extraFiles), extraFiles, dataJson)
             : BundleFromDisk(request, entry, extraFiles, dataJson);
+
+        var requestUri = new Uri(endpoint.AbsoluteUri + BuildQuery(entry, dataJson is not null, request.Inputs));
 
         using var content = new ByteArrayContent(zipBytes);
         content.Headers.ContentType = new MediaTypeHeaderValue(RenderProtocol.BundleContentType);
 
-        using var httpRequest = new HttpRequestMessage(
-            HttpMethod.Post,
-            RenderProtocol.RenderPath.TrimStart('/') + BuildQuery(entry, dataJson is not null, request.Inputs))
-        {
-            Content = content,
-        };
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = content };
+        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/pdf"));
 
-        var response = await _http.SendAsync(httpRequest, completionOption, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        HttpResponseMessage response;
+        try
         {
-            var detail = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            response.Dispose();
-            var message = $"Typst render failed with status {(int)response.StatusCode}.";
-            throw new TypstRenderException((int)response.StatusCode, message, string.IsNullOrWhiteSpace(detail) ? null : detail);
+            response = await _http.SendAsync(httpRequest, completionOption, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // HttpClient reports its own timeout as a cancellation, which is
+            // indistinguishable from the caller cancelling unless we check.
+            throw new TypstRenderException(
+                0,
+                $"Rendering '{entry}' timed out after {_http.Timeout}. Raise "
+                    + $"{nameof(TypstRenderClientOptions)}.{nameof(TypstRenderClientOptions.Timeout)} "
+                    + "if the document legitimately takes longer.",
+                detail: null,
+                entry: entry,
+                requestUri: requestUri,
+                innerException: ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new TypstRenderException(
+                0,
+                $"Could not reach the Typst render service at '{requestUri}'.",
+                detail: ex.Message,
+                entry: entry,
+                requestUri: requestUri,
+                innerException: ex);
         }
 
-        return response;
+        if (response.IsSuccessStatusCode)
+        {
+            return response;
+        }
+
+        var statusCode = (int)response.StatusCode;
+        var reason = response.ReasonPhrase;
+#if NET5_0_OR_GREATER
+        var detail = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+#else
+        var detail = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+#endif
+        response.Dispose();
+
+        throw new TypstRenderException(
+            statusCode,
+            $"Rendering '{entry}' failed with status {statusCode}"
+                + (string.IsNullOrEmpty(reason) ? "." : $" ({reason})."),
+            string.IsNullOrWhiteSpace(detail) ? null : detail,
+            entry: entry,
+            requestUri: requestUri);
     }
 
     /// <inheritdoc />
     public IReadOnlyList<string> GetTemplates()
     {
-        var root = _options.TemplateRoot
-            ?? throw new InvalidOperationException(
-                $"No template root configured. Set {nameof(TypstRenderClientOptions)}.{nameof(TypstRenderClientOptions.TemplateRoot)}.");
+        var root = RequireTemplateRoot(_options.TemplateRoot);
 
         if (!Directory.Exists(root))
         {
@@ -169,14 +233,8 @@ public sealed class TypstRenderClient : ITypstRenderClient
     public TemplateManifest GetBundleManifest(
         string entry, BundleMode? bundleMode = null, IEnumerable<string>? extraFiles = null)
     {
-        if (string.IsNullOrWhiteSpace(entry))
-        {
-            throw new ArgumentException("Entry must name a .typ file inside the template root.", nameof(entry));
-        }
-
-        var root = _options.TemplateRoot
-            ?? throw new InvalidOperationException(
-                $"No template root configured. Set {nameof(TypstRenderClientOptions)}.{nameof(TypstRenderClientOptions.TemplateRoot)}.");
+        var entryRel = TemplateScanner.NormalizeEntry(entry);
+        var root = RequireTemplateRoot(_options.TemplateRoot);
 
         if (!Directory.Exists(root))
         {
@@ -184,10 +242,9 @@ public sealed class TypstRenderClient : ITypstRenderClient
         }
 
         var extraPaths = extraFiles?
-            .Select(p => p.Replace('\\', '/').TrimStart('/'))
+            .Select(NormalizePath)
             .ToList();
-        var scan = TemplateScanner.Scan(
-            root, entry.Replace('\\', '/').TrimStart('/'), bundleMode ?? _options.BundleMode, extraPaths);
+        var scan = TemplateScanner.Scan(root, entryRel, bundleMode ?? _options.BundleMode, extraPaths);
         return new TemplateManifest(scan.Files, scan.FullFolderReason);
     }
 
@@ -211,40 +268,79 @@ public sealed class TypstRenderClient : ITypstRenderClient
             : AppendFiles(templateZip, extraFiles, dataJson);
     }
 
-    /// <summary>
-    /// Normalizes <see cref="TypstRenderRequest.ExtraFiles"/> keys to root-relative
-    /// '/'-separated paths and rejects a collision with the conventional data file.
-    /// </summary>
-    private static IReadOnlyDictionary<string, byte[]> NormalizeExtraFiles(
-        IDictionary<string, byte[]> extraFiles, bool hasData)
-    {
-        if (extraFiles.Count == 0)
-        {
-            return EmptyFiles;
-        }
+    private static string RequireTemplateRoot(string? root)
+        => root ?? throw new InvalidOperationException(
+            $"No template root configured. Set {nameof(TypstRenderClientOptions)}."
+                + $"{nameof(TypstRenderClientOptions.TemplateRoot)}. A relative path resolves against "
+                + "the process working directory, which differs under IIS and in a container — "
+                + "consider Path.Combine(AppContext.BaseDirectory, \"templates\").");
 
-        var normalized = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        foreach (var kvp in extraFiles)
+    /// <summary>
+    /// Normalizes bundle paths to root-relative '/'-separated form and rejects
+    /// ones that cannot name a file inside the bundle.
+    /// </summary>
+    private static IReadOnlyDictionary<string, byte[]> NormalizeFileSet(
+        IEnumerable<KeyValuePair<string, byte[]>> files, string parameterName, bool rejectDataFile)
+    {
+        Dictionary<string, byte[]>? normalized = null;
+
+        foreach (var kvp in files)
         {
-            var path = kvp.Key.Replace('\\', '/').TrimStart('/');
+            var path = NormalizePath(kvp.Key);
             if (path.Length == 0)
             {
-                throw new ArgumentException("Extra file paths must be non-empty.", nameof(extraFiles));
+                throw new ArgumentException($"{parameterName} paths must be non-empty.", parameterName);
             }
 
-            if (hasData && string.Equals(path, RenderProtocol.DataFileName, StringComparison.Ordinal))
+            if (path.Split('/').Contains(".."))
             {
                 throw new ArgumentException(
-                    $"Extra file '{kvp.Key}' collides with the conventional '{RenderProtocol.DataFileName}' " +
-                    $"written for {nameof(TypstRenderRequest)}.{nameof(TypstRenderRequest.Data)}.",
-                    nameof(extraFiles));
+                    $"{parameterName} path '{kvp.Key}' must stay inside the bundle, without '..'.",
+                    parameterName);
             }
 
+            if (rejectDataFile && string.Equals(path, RenderProtocol.DataFileName, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"{parameterName} path '{kvp.Key}' collides with the conventional "
+                        + $"'{RenderProtocol.DataFileName}' written for "
+                        + $"{nameof(TypstRenderRequest)}.{nameof(TypstRenderRequest.Data)}.",
+                    parameterName);
+            }
+
+            normalized ??= new Dictionary<string, byte[]>(StringComparer.Ordinal);
             normalized[path] = kvp.Value;
         }
 
-        return normalized;
+        return normalized ?? EmptyFiles;
     }
+
+    /// <summary>
+    /// Normalizes an in-memory bundle's keys the same way as everything else — a
+    /// Windows caller building keys with <c>Path.Combine</c> would otherwise ship
+    /// entries literally named <c>invoice\main.typ</c> — and fails fast when the
+    /// entry is not among them, instead of after a round-trip.
+    /// </summary>
+    private static IReadOnlyDictionary<string, byte[]> NormalizeSuppliedFiles(
+        TypstRenderRequest request, string entry, IReadOnlyDictionary<string, byte[]> extraFiles)
+    {
+        var files = NormalizeFileSet(
+            request.Files!,
+            $"{nameof(TypstRenderRequest)}.{nameof(TypstRenderRequest.Files)}",
+            rejectDataFile: false);
+
+        if (!files.ContainsKey(entry) && !extraFiles.ContainsKey(entry))
+        {
+            throw new ArgumentException(
+                $"Entry '{entry}' is not present in {nameof(TypstRenderRequest)}."
+                    + $"{nameof(TypstRenderRequest.Files)}. Supplied: {string.Join(", ", files.Keys)}",
+                nameof(request));
+        }
+
+        return files;
+    }
+
+    private static string NormalizePath(string path) => path.Replace('\\', '/').TrimStart('/');
 
     private static string BuildQuery(string entry, bool hasData, IDictionary<string, string> inputs)
     {
@@ -259,6 +355,22 @@ public sealed class TypstRenderClient : ITypstRenderClient
 
         foreach (var kvp in inputs)
         {
+            if (string.IsNullOrEmpty(kvp.Key))
+            {
+                throw new ArgumentException(
+                    $"{nameof(TypstRenderRequest)}.{nameof(TypstRenderRequest.Inputs)} keys must be non-empty.",
+                    nameof(inputs));
+            }
+
+            if (hasData && string.Equals(kvp.Key, RenderProtocol.DataPathInputKey, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"Input '{RenderProtocol.DataPathInputKey}' is set by the client for "
+                        + $"{nameof(TypstRenderRequest)}.{nameof(TypstRenderRequest.Data)}; supplying it as well "
+                        + "would pass two conflicting values to typst.",
+                    nameof(inputs));
+            }
+
             AppendInput(sb, kvp.Key, kvp.Value);
         }
 
@@ -276,7 +388,7 @@ public sealed class TypstRenderClient : ITypstRenderClient
     private static byte[] AppendFiles(
         byte[] templateZip, IReadOnlyDictionary<string, byte[]> extraFiles, byte[]? dataJson)
     {
-        var ms = new MemoryStream();
+        using var ms = new MemoryStream(templateZip.Length + 4096);
         ms.Write(templateZip, 0, templateZip.Length);
 
         using (var archive = new ZipArchive(ms, ZipArchiveMode.Update, leaveOpen: true))
@@ -351,10 +463,39 @@ public sealed class TypstRenderClient : ITypstRenderClient
         WriteEntry(archive, path, content);
     }
 
-    private static Uri EnsureTrailingSlash(Uri uri)
-        => uri.AbsolutePath.EndsWith("/", StringComparison.Ordinal)
-            ? uri
-            : new Uri(uri.AbsoluteUri + "/", UriKind.Absolute);
+    /// <summary>
+    /// Resolves the absolute <c>POST /render</c> URI once, so no request has to
+    /// rely on relative-URI resolution against a mutable
+    /// <see cref="HttpClient.BaseAddress"/>.
+    /// </summary>
+    private static Uri BuildRenderEndpoint(Uri baseAddress)
+    {
+        if (!baseAddress.IsAbsoluteUri)
+        {
+            throw new ArgumentException(
+                $"{nameof(TypstRenderClientOptions)}.{nameof(TypstRenderClientOptions.BaseAddress)} "
+                    + $"must be an absolute URI, e.g. new Uri(\"http://localhost:8080\"); got '{baseAddress}'.",
+                nameof(baseAddress));
+        }
+
+        if (!string.IsNullOrEmpty(baseAddress.Query) || !string.IsNullOrEmpty(baseAddress.Fragment))
+        {
+            throw new ArgumentException(
+                $"{nameof(TypstRenderClientOptions)}.{nameof(TypstRenderClientOptions.BaseAddress)} "
+                    + $"must not carry a query string or fragment; got '{baseAddress}'.",
+                nameof(baseAddress));
+        }
+
+        // GetLeftPart, not AbsoluteUri: appending to the latter would put the
+        // separator after a query string and silently drop the path prefix.
+        var path = baseAddress.GetLeftPart(UriPartial.Path);
+        if (!path.EndsWith("/", StringComparison.Ordinal))
+        {
+            path += "/";
+        }
+
+        return new Uri(path + RenderProtocol.RenderPath.TrimStart('/'), UriKind.Absolute);
+    }
 
     /// <summary>
     /// Read-only stream over an HTTP response body that disposes the owning
@@ -382,6 +523,26 @@ public sealed class TypstRenderClient : ITypstRenderClient
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
             => _inner.ReadAsync(buffer, offset, count, cancellationToken);
+
+        public override Task CopyToAsync(Stream destination, int bufferSize, CancellationToken cancellationToken)
+            => _inner.CopyToAsync(destination, bufferSize, cancellationToken);
+
+#if NET5_0_OR_GREATER
+        // Without these the modern async path detours through the byte[]
+        // overload, and `await using` falls back to a synchronous Dispose.
+        public override int Read(Span<byte> buffer) => _inner.Read(buffer);
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => _inner.ReadAsync(buffer, cancellationToken);
+
+        public override async ValueTask DisposeAsync()
+        {
+            await _inner.DisposeAsync().ConfigureAwait(false);
+            _response.Dispose();
+            GC.SuppressFinalize(this);
+        }
+#endif
 
         public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
         public override void SetLength(long value) => throw new NotSupportedException();

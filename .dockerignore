@@ -2,9 +2,18 @@
 **/obj/
 **/out/
 .dotnet/
+# The locally installed Typst CLI: tens of megabytes that would be shipped into
+# the build context on every `docker build`, and the image installs its own.
+.typst/
 .git/
+.github/
 .vs/
 .vscode/
 .idea/
 samples/
+tests/
+artifacts/
+TestResults/
+**/*.md
 **/*.user
+docker-compose*.yml

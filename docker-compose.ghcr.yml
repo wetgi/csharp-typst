@@ -1,0 +1,21 @@
+# Run the pre-built rendering service image — no local build, no .NET SDK.
+#
+#   docker compose -f docker-compose.ghcr.yml up -d
+#
+# Pin a release tag (e.g. :1.2.3) rather than :latest for anything you depend on.
+services:
+  typst-render:
+    container_name: typst-render-service
+    image: ghcr.io/wetgi/typst-render-service:latest
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_HTTP_PORTS: "8080"
+      # See the README's configuration table; defaults apply when unset.
+      Render__TimeoutSeconds: "30"
+      Render__MaxUploadBytes: "20971520"
+      Render__MaxConcurrency: "0"
+    ports:
+      - "8080:8080"
+    tmpfs:
+      - /tmp:size=512m
+    restart: unless-stopped

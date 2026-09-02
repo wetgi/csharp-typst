@@ -10,8 +10,18 @@ public static class RenderProtocol
     /// <summary>Route that compiles a bundle: <c>POST /render</c> with a zip body.</summary>
     public const string RenderPath = "/render";
 
-    /// <summary>Liveness route.</summary>
+    /// <summary>
+    /// Liveness route: answers as long as the process is up. Cheap and
+    /// dependency-free — use it for a restart decision, not a traffic decision.
+    /// </summary>
     public const string HealthPath = "/health";
+
+    /// <summary>
+    /// Readiness route: answers <c>200</c> only once the Typst binary has been
+    /// confirmed runnable (and reports its version), <c>503</c> otherwise — so
+    /// an image whose Typst install is broken is not sent traffic.
+    /// </summary>
+    public const string ReadyPath = "/ready";
 
     /// <summary>Content type of the request body.</summary>
     public const string BundleContentType = "application/zip";

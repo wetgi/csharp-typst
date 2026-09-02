@@ -1,0 +1,45 @@
+<Project>
+
+  <!-- Settings shared by every project in the repository. Keep project files to
+       what is genuinely project-specific (target framework, package refs). -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <!-- Reproducible builds: a consumer stepping into the package with SourceLink
+       needs the compiler to emit paths that do not depend on the build machine. -->
+  <PropertyGroup>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(ContinuousIntegrationBuild)' == '' and '$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+  </PropertyGroup>
+
+  <!-- Dependency auditing, stated explicitly rather than left to the SDK
+       default, because TreatWarningsAsErrors makes an advisory a hard build
+       failure — which is the behaviour we want for a published library. CI used
+       to exclude the sample project to dodge NU1903; that advisory
+       (Microsoft.OpenApi, vulnerable through 2.7.4) is fixed by the 2.7.5 pin,
+       so the exclusion is gone and Dependabot keeps it that way. -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+  </PropertyGroup>
+
+  <!-- Shared package identity. Per-package metadata (id, description, tags)
+       stays in the packable project. -->
+  <PropertyGroup>
+    <Authors>Gilles Wetzel</Authors>
+    <Company>Gilles Wetzel</Company>
+    <Copyright>Copyright (c) Gilles Wetzel</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/wetgi/csharp-typst</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/wetgi/csharp-typst.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+  </PropertyGroup>
+
+</Project>

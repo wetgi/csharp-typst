@@ -1,0 +1,33 @@
+version: 2
+updates:
+  # NuGet dependencies across the solution. Grouped so a routine framework bump
+  # is one PR to review rather than six.
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      microsoft-extensions:
+        patterns:
+          - "Microsoft.Extensions.*"
+      aspnetcore:
+        patterns:
+          - "Microsoft.AspNetCore.*"
+          - "Microsoft.OpenApi*"
+      test-tooling:
+        patterns:
+          - "xunit*"
+          - "Microsoft.NET.Test.Sdk"
+
+  # Pinned action versions in the workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  # The base images in the service Dockerfile.
+  - package-ecosystem: docker
+    directory: "/src/TypstRender.Service"
+    schedule:
+      interval: weekly
