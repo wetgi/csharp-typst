@@ -453,7 +453,7 @@ public sealed class TypstRenderClientTests : IDisposable
             Entry = "invoice/main.typ",
             Files = new Dictionary<string, byte[]>
             {
-                ["invoice\main.typ"] = Encoding.UTF8.GetBytes("= Hi"),
+                [@"invoice\main.typ"] = Encoding.UTF8.GetBytes("= Hi"),
                 ["/generated/chart.svg"] = Encoding.UTF8.GetBytes("<svg/>"),
             },
         });

@@ -17,16 +17,21 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
 
-  <!-- Dependency auditing, stated explicitly rather than left to the SDK
-       default, because TreatWarningsAsErrors makes an advisory a hard build
-       failure — which is the behaviour we want for a published library. CI used
-       to exclude the sample project to dodge NU1903; that advisory
-       (Microsoft.OpenApi, vulnerable through 2.7.4) is fixed by the 2.7.5 pin,
-       so the exclusion is gone and Dependabot keeps it that way. -->
+  <!-- Dependency auditing: on, and reporting everything down to low severity,
+       but the line between "stop the build" and "raise a warning" is drawn by
+       severity rather than by TreatWarningsAsErrors promoting all four codes.
+       High and critical (NU1903/NU1904) block a build, because they must never
+       reach a release. Low and moderate (NU1901/NU1902) stay warnings: they are
+       usually a transitive dependency of a sample, nothing in this repo can fix
+       them until upstream ships a patch, and a hard failure there is what forced
+       CI to exclude the sample project to dodge NU1903 in the first place — so
+       one advisory in one dev-only package blocked all work. Dependabot raises
+       the bump; see .github/dependabot.yml. -->
   <PropertyGroup>
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>
     <NuGetAuditLevel>low</NuGetAuditLevel>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902</WarningsNotAsErrors>
   </PropertyGroup>
 
   <!-- Shared package identity. Per-package metadata (id, description, tags)

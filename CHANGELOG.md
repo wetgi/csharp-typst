@@ -110,7 +110,15 @@ same `v*.*.*` tag. This project follows [Semantic Versioning](https://semver.org
 ### Repository
 
 - Added `Directory.Build.props`, `.editorconfig`, `CONTRIBUTING.md`, `SECURITY.md`, this
-  changelog, and Dependabot for NuGet, Actions and Docker.
+  changelog, and Dependabot for NuGet, Actions and Docker. Dependency audits report down
+  to low severity, but only high and critical advisories fail a build — a low-severity
+  advisory in a sample's transitive dependency should not block all work, which is what
+  forced CI to skip the sample project before.
+- `scripts/install-typst.sh` works on macOS (it only ever fetched a Linux-musl target, so
+  the documented setup step could not be completed on a Mac) and now writes its
+  `install-typst.sh.env` on every path — a runner that already had the pinned Typst on
+  `PATH` exited before writing it, and CI's `source` of that file then failed the step
+  before a single test ran.
 - **CI builds and tests the whole solution** and packs the client as a release dry-run, so
   the `netstandard2.0` target is compiled before release rather than during it. Added a
   `permissions` block, concurrency cancellation and NuGet caching;
