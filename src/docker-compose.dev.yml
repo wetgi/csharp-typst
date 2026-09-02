@@ -1,6 +1,11 @@
 services:
   typst-render:
-    image: ghcr.io/wetgi/typst-render-service:sha-0b7f12a
+    container_name: typst-render-service
+    build:
+      context: ..
+      dockerfile: src/TypstRender.Service/Dockerfile
+      args:
+        TYPST_VERSION: "0.15.0"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_HTTP_PORTS: "8080"

@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Net;
 using System.Text;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace TypstRender.Client.Tests;
@@ -28,7 +29,7 @@ public sealed class TypstRenderClientTests : IDisposable
             TemplateRoot = _root,
         };
         configure?.Invoke(options);
-        return new TypstRenderClient(new HttpClient(_handler), options);
+        return new TypstRenderClient(new HttpClient(_handler), Options.Create(options));
     }
 
     private void WriteFile(string relativePath, string content)
@@ -356,41 +357,12 @@ public sealed class TypstRenderClientTests : IDisposable
         Assert.DoesNotContain("data.json", ReadZip(_handler.LastBody!).Keys);
     }
 
-    [Fact]
-    public async Task RenderAsync_ErrorResponse_PutsDetailInTheExceptionMessage()
-    {
-        // The Typst stderr is the single most useful artifact in the system, so
-        // a plain logger.LogError(ex, ...) has to show it.
-        WriteFile("letter/main.typ", "= Letter");
-        _handler.NextResponse = () => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
-        {
-            Content = new StringContent("error: unknown variable: totl"),
-        };
-
-        var ex = await Assert.ThrowsAsync<TypstRenderException>(
-            () => CreateClient().RenderAsync("letter/main.typ"));
-
-        Assert.True(ex.IsCompileError);
-        Assert.Contains("error: unknown variable: totl", ex.Message);
-        Assert.Contains("letter/main.typ", ex.Message);
-        Assert.Equal("letter/main.typ", ex.Entry);
-        Assert.NotNull(ex.RequestUri);
-    }
-
-    [Fact]
-    public async Task RenderAsync_UnreachableService_ThrowsTypstRenderExceptionNamingTheAddress()
-    {
-        WriteFile("letter/main.typ", "= Letter");
-        _handler.NextResponse = () => throw new HttpRequestException("Connection refused");
-
-        var ex = await Assert.ThrowsAsync<TypstRenderException>(
-            () => CreateClient().RenderAsync("letter/main.typ"));
-
-        Assert.True(ex.IsTransportFailure);
-        Assert.Equal(0, ex.StatusCode);
-        Assert.Contains("typst-render.test", ex.Message);
-        Assert.IsType<HttpRequestException>(ex.InnerException);
-    }
+    [Theory]
+    [InlineData("../outside/main.typ")]
+    [InlineData("invoice/../../main.typ")]
+    [InlineData("")]
+    public async Task RenderAsync_EntryEscapingTheRoot_Throws(string entry)
+        => await Assert.ThrowsAsync<ArgumentException>(() => CreateClient().RenderAsync(entry));
 
     [Fact]
     public async Task RenderAsync_WithoutBaseAddress_ThrowsNamingTheSetting()
@@ -426,90 +398,13 @@ public sealed class TypstRenderClientTests : IDisposable
         // BaseAddress assignment, which used to make construction fail.
         var http = new HttpClient(_handler);
 
-        _ = new TypstRenderClient(http, new TypstRenderClientOptions
+        _ = new TypstRenderClient(http, Options.Create(new TypstRenderClientOptions
         {
             BaseAddress = new Uri("http://typst-render.test"),
             TemplateRoot = _root,
-        });
+        }));
 
         Assert.Null(http.BaseAddress);
-    }
-
-    [Theory]
-    [InlineData("../outside/main.typ")]
-    [InlineData("invoice/../../main.typ")]
-    [InlineData("")]
-    public async Task RenderAsync_EntryEscapingTheRoot_Throws(string entry)
-        => await Assert.ThrowsAsync<ArgumentException>(() => CreateClient().RenderAsync(entry));
-
-    [Fact]
-    public async Task RenderAsync_InMemoryFiles_NormalizeWindowsSeparatorsAndLeadingSlashes()
-    {
-        // A caller building keys with Path.Combine on Windows used to ship an
-        // entry literally named "invoice\main.typ", which the Linux service
-        // then reported as a missing entry.
-        await CreateClient().RenderAsync(new TypstRenderRequest
-        {
-            Entry = "invoice/main.typ",
-            Files = new Dictionary<string, byte[]>
-            {
-                [@"invoice\main.typ"] = Encoding.UTF8.GetBytes("= Hi"),
-                ["/generated/chart.svg"] = Encoding.UTF8.GetBytes("<svg/>"),
-            },
-        });
-
-        Assert.Equal(
-            ["generated/chart.svg", "invoice/main.typ"],
-            ReadZip(_handler.LastBody!).Keys.OrderBy(k => k, StringComparer.Ordinal));
-    }
-
-    [Fact]
-    public async Task RenderAsync_InMemoryFilesMissingTheEntry_ThrowsBeforeAnyRequest()
-    {
-        var ex = await Assert.ThrowsAsync<ArgumentException>(() => CreateClient().RenderAsync(
-            new TypstRenderRequest
-            {
-                Entry = "invoice/main.typ",
-                Files = new Dictionary<string, byte[]> { ["letter/main.typ"] = Encoding.UTF8.GetBytes("= Hi") },
-            }));
-
-        Assert.Contains("letter/main.typ", ex.Message);
-        Assert.Null(_handler.LastRequestUri);
-    }
-
-    [Fact]
-    public async Task RenderAsync_InputCollidingWithTheDataPathConvention_Throws()
-    {
-        WriteFile("letter/main.typ", "= Letter");
-
-        await Assert.ThrowsAsync<ArgumentException>(() => CreateClient().RenderAsync(new TypstRenderRequest
-        {
-            Entry = "letter/main.typ",
-            Data = new { x = 1 },
-            Inputs = { ["data-path"] = "/mine.json" },
-        }));
-    }
-
-    [Fact]
-    public async Task RenderToFileAsync_WritesThePdfToDisk()
-    {
-        WriteFile("letter/main.typ", "= Letter");
-        var target = Path.Combine(_root, "out", "letter.pdf");
-
-        await CreateClient().RenderToFileAsync("letter/main.typ", target);
-
-        Assert.Equal(FakePdf, await File.ReadAllBytesAsync(target));
-    }
-
-    [Fact]
-    public async Task RenderToAsync_CopiesThePdfIntoTheDestination()
-    {
-        WriteFile("letter/main.typ", "= Letter");
-        using var destination = new MemoryStream();
-
-        await CreateClient().RenderToAsync("letter/main.typ", destination);
-
-        Assert.Equal(FakePdf, destination.ToArray());
     }
 
     private static Dictionary<string, string> ReadZip(byte[] zipBytes)
@@ -547,7 +442,7 @@ public sealed class TypstRenderClientTests : IDisposable
 
             if (NextResponse is not null)
             {
-                return NextResponse(); // may itself throw, modelling a transport failure
+                return NextResponse();
             }
 
             return new HttpResponseMessage(HttpStatusCode.OK)

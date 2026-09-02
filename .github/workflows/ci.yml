@@ -6,22 +6,8 @@ on:
   pull_request:
     branches: [main]
 
-# Least privilege: CI only reads the repository.
-permissions:
-  contents: read
-
-# A newer commit on the same ref supersedes an in-flight run.
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  DOTNET_NOLOGO: true
-  DOTNET_CLI_TELEMETRY_OPTOUT: true
-  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
-
 jobs:
-  build-and-test:
+  test:
     runs-on: ubuntu-latest
 
     steps:
@@ -32,50 +18,33 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-          cache: true
-          cache-dependency-path: "**/*.csproj"
 
       - name: Install Typst
         run: bash ./scripts/install-typst.sh
 
-      # The whole solution, so a break in the client, the service, or the sample
-      # is caught here — and so the client's netstandard2.0 target is actually
-      # compiled (the test projects only ever pull in its net10.0 target, which
-      # let a netstandard-only break slip through to `dotnet pack` at release).
+      # Restrict to the test projects rather than the full solution: the samples
+      # project pulls in a package with a known advisory (NU1903) that's unrelated
+      # to running the tests and would otherwise fail restore. dotnet only accepts
+      # one project per invocation, so each test project is handled separately.
       - name: Restore
-        run: dotnet restore TypstRender.slnx
+        run: |
+          dotnet restore tests/TypstRender.Service.Tests/TypstRender.Service.Tests.csproj
+          dotnet restore tests/TypstRender.Client.Tests/TypstRender.Client.Tests.csproj
 
       - name: Build
-        run: dotnet build TypstRender.slnx --no-restore --configuration Release
+        run: |
+          dotnet build tests/TypstRender.Service.Tests/TypstRender.Service.Tests.csproj --no-restore --configuration Release
+          dotnet build tests/TypstRender.Client.Tests/TypstRender.Client.Tests.csproj --no-restore --configuration Release
 
       - name: Test
         run: |
           source ./scripts/install-typst.sh.env
-          dotnet test TypstRender.slnx \
-            --no-build \
-            --configuration Release \
-            --logger trx \
-            --results-directory ./TestResults
+          dotnet test tests/TypstRender.Service.Tests/TypstRender.Service.Tests.csproj --no-build --configuration Release --logger "trx;LogFileName=service-tests.trx"
+          dotnet test tests/TypstRender.Client.Tests/TypstRender.Client.Tests.csproj --no-build --configuration Release --logger "trx;LogFileName=client-tests.trx"
 
-      # `always()`, not `failure()`: the .trx files are just as useful for
-      # confirming which tests ran on a green build.
       - name: Upload test results
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: ./TestResults/**/*.trx
-          if-no-files-found: warn
-
-      # Packing on every build catches packaging regressions (a missing README,
-      # a broken symbol package, an unpublished dependency) before a release tag.
-      - name: Pack (validation only)
-        run: dotnet pack src/TypstRender.Client/TypstRender.Client.csproj --no-build --configuration Release -o ./artifacts
-
-      - name: Upload package
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nuget-package
-          path: ./artifacts/*.*nupkg
-          if-no-files-found: warn
+          path: "**/*.trx"

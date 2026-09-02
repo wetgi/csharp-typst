@@ -8,11 +8,7 @@ namespace TypstRender.Client;
 /// </summary>
 public sealed class TemplateManifest
 {
-    /// <summary>
-    /// Creates a manifest. Public so a consumer faking
-    /// <see cref="ITypstRenderClient"/> in a test can return one.
-    /// </summary>
-    public TemplateManifest(IReadOnlyList<string> files, string? fullFolderReason)
+    internal TemplateManifest(IReadOnlyList<string> files, string? fullFolderReason)
     {
         Files = files;
         FullFolderReason = fullFolderReason;
