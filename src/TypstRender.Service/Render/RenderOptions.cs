@@ -23,8 +23,8 @@ public sealed class RenderOptions
     public long MaxExtractedBytes { get; set; } = 200L * 1024 * 1024;
 
     /// <summary>
-    /// Maximum number of files in an uploaded bundle. Default 2000 — a template
-    /// closure is tens of files; anything near this is a malformed or hostile
+    /// Maximum number of records in an uploaded zip. Default 2000 — a template
+    /// closure is tens of entries; anything near this is a malformed or hostile
     /// bundle, not a document.
     /// </summary>
     public int MaxBundleEntries { get; set; } = 2000;

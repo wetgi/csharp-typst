@@ -145,7 +145,7 @@ public sealed class RenderEndpointTests : IClassFixture<WebApplicationFactory<Pr
         using var response = await client.PostAsync(RenderUrl, content);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("more than 3 files", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Contains("more than 3 entries", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     [Fact]

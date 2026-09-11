@@ -100,6 +100,10 @@ public sealed class TypstRunner(IOptions<RenderOptions> options, ILogger<TypstRu
             var pdf = await File.ReadAllBytesAsync(outputPath, ct);
             return new TypstRun(pdf, string.Empty, TimedOut: false, StartFailed: false);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "typst exited 0 but no output at {OutputPath}", outputPath);

@@ -15,12 +15,6 @@ public interface ITypstRenderClient
     /// <param name="data">Object serialized to <c>data.json</c>; <c>null</c> sends no data file.</param>
     /// <param name="cancellationToken">Token used to cancel the request.</param>
     /// <returns>The rendered PDF bytes.</returns>
-    /// <remarks>
-    /// Two overloads rather than one with an optional <paramref name="data"/>: with a
-    /// single method, <c>RenderAsync(entry, cancellationToken)</c> bound the token to
-    /// <c>object? data</c>, serializing it into <c>data.json</c> and silently never
-    /// cancelling.
-    /// </remarks>
     Task<byte[]> RenderAsync(string entry, object? data, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -87,7 +81,7 @@ public interface ITypstRenderClient
     /// A reference that does not exist on disk fails here with the chain of files
     /// that led to it, rather than as an opaque server error after a round-trip.
     /// Throws <see cref="System.ArgumentException"/> when <paramref name="entry"/>
-    /// is blank or climbs out of the root, <see cref="System.InvalidOperationException"/>
+    /// is blank, rooted, or climbs out of the root, <see cref="System.InvalidOperationException"/>
     /// when no template root is configured, and <see cref="System.IO.DirectoryNotFoundException"/>
     /// when the configured root does not exist on disk — note this differs from
     /// <see cref="GetTemplates"/>, which returns an empty list for a missing root.

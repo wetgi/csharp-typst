@@ -357,10 +357,24 @@ public sealed class TypstRenderClientTests : IDisposable
         Assert.DoesNotContain("data.json", ReadZip(_handler.LastBody!).Keys);
     }
 
+    [Fact]
+    public async Task RenderAsync_EntryOnlyOverload_HonorsCancellation()
+    {
+        WriteFile("letter/main.typ", "= Letter");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => CreateClient().RenderAsync("letter/main.typ", cts.Token));
+    }
+
     [Theory]
     [InlineData("../outside/main.typ")]
     [InlineData("invoice/../../main.typ")]
+    [InlineData(" ")]
     [InlineData("")]
+    [InlineData("/absolute/main.typ")]
+    [InlineData("C:/outside/main.typ")]
     public async Task RenderAsync_EntryEscapingTheRoot_Throws(string entry)
         => await Assert.ThrowsAsync<ArgumentException>(() => CreateClient().RenderAsync(entry));
 
@@ -392,11 +406,13 @@ public sealed class TypstRenderClientTests : IDisposable
             () => CreateClient(o => o.BaseAddress = new Uri("/render", UriKind.Relative)));
 
     [Fact]
-    public void Constructor_DoesNotMutateTheSuppliedHttpClient()
+    public async Task Constructor_DoesNotMutateTheSuppliedHttpClient()
     {
         // A shared/static HttpClient that has already sent a request rejects a
         // BaseAddress assignment, which used to make construction fail.
         var http = new HttpClient(_handler);
+        using var content = new ByteArrayContent([]);
+        using var response = await http.PostAsync("http://typst-render.test/warmup", content);
 
         _ = new TypstRenderClient(http, Options.Create(new TypstRenderClientOptions
         {
@@ -437,6 +453,7 @@ public sealed class TypstRenderClientTests : IDisposable
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             LastRequestUri = request.RequestUri;
             LastBody = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
 

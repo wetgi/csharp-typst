@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.RegularExpressions;
 using TypstRender.Contracts;
 
@@ -13,14 +12,9 @@ namespace TypstRender.Client;
 /// and asset readers like <c>image(...)</c>) — so shared modules outside the
 /// entry's folder ride along while sibling templates stay home.
 ///
-/// Scanning happens in two steps. First the source is tokenized so that
-/// comments and raw blocks are blanked while string literals are preserved
-/// intact: matching references against raw text made a <c>"/*"</c> or a
-/// <c>"//"</c> inside a string swallow the statements that followed it, which
-/// silently dropped files from the bundle. Then references are matched only in
-/// code position — after <c>#</c>, a brace, a semicolon or at the start of a
-/// line — so prose such as <c>Prices include "VAT"</c> is not mistaken for an
-/// import.
+/// Before matching, comments and raw blocks are masked while strings and line
+/// breaks are preserved. Imports are matched only in code position, so prose
+/// such as <c>Prices include "VAT"</c> is not mistaken for an import.
 ///
 /// The scanner stays deliberately fail-safe: an <c>#import</c>/<c>#include</c>
 /// path it cannot resolve statically (a variable, or a string it concatenates)
@@ -29,11 +23,9 @@ namespace TypstRender.Client;
 /// convention) are tolerated instead, because a reader cannot pull in further
 /// references of its own.
 ///
-/// Two known limits, both of which under-bundle rather than fail: only the
-/// first path in a reader call is followed (so
-/// <c>bibliography(("a.bib", "b.bib"))</c> misses the second), and a path
-/// produced entirely by an expression is invisible. Use
-/// <see cref="BundleMode.Full"/> for a template that needs either.
+/// Reader calls remain deliberately conservative: only a literal first
+/// argument is followed. Use <see cref="BundleMode.Full"/> when paths are
+/// assembled dynamically or document text resembles a reader call.
 /// </summary>
 internal static class TemplateScanner
 {
@@ -41,10 +33,6 @@ internal static class TemplateScanner
     // a semicolon, or begins a line. Typst allows a bare `import` in code mode,
     // so requiring '#' would miss those; allowing it anywhere matches prose.
     private const string CodePosition = @"(?:^|[#{};])[ \t]*";
-
-    // Named arguments may precede the positional path, and `bibliography` takes
-    // an array, so tolerate a leading '(' too.
-    private const string ReaderCallOpen = @"\s*\(\s*\(?\s*(?:[\w-]+\s*:\s*[^,()""]*,\s*)*";
 
     // A literal that is immediately concatenated is only a prefix, not a path.
     private const string NotConcatenated = @"(?!\s*\+)";
@@ -56,10 +44,10 @@ internal static class TemplateScanner
     private static readonly Regex LiteralImport = new(
         CodePosition + @"(?:import|include)\s+""([^""\r\n]+)""" + NotConcatenated, Options);
 
-    // Asset readers taking a string-literal path.
+    // Asset readers taking a string-literal path as their first argument.
     private static readonly Regex LiteralReader = new(
-        @"(?<![\w.\-])(?:image|read|json|csv|yaml|toml|xml|cbor|bibliography|plugin)"
-            + ReaderCallOpen + @"""([^""\r\n]+)""" + NotConcatenated,
+        @"(?<![\w.\-])(?:image|read|json|csv|yaml|toml|xml|cbor|bibliography)\s*\(\s*""([^""\r\n]+)"""
+            + NotConcatenated,
         Options);
 
     // #import/#include followed by an expression rather than a string literal.
@@ -87,7 +75,7 @@ internal static class TemplateScanner
             ? new HashSet<string>(extraPaths, StringComparer.Ordinal)
             : null;
 
-        root = TrimTrailingSeparator(Path.GetFullPath(root));
+        root = Path.GetFullPath(root);
         var entryRel = NormalizeEntry(entry);
         if (!File.Exists(ToFullPath(root, entryRel)))
         {
@@ -123,9 +111,9 @@ internal static class TemplateScanner
         while (pending.Count > 0)
         {
             var rel = pending.Dequeue();
-            var code = StripCommentsAndRawBlocks(File.ReadAllText(ToFullPath(root, rel)));
+            var source = PrepareSource(File.ReadAllText(ToFullPath(root, rel)));
 
-            var unresolvable = FirstUnresolvableImport(code);
+            var unresolvable = FirstUnresolvableImport(source);
             if (unresolvable is not null)
             {
                 // Cannot prove what the expression resolves to: ship everything.
@@ -133,7 +121,7 @@ internal static class TemplateScanner
                     AllFiles(root), $"unresolvable import expression '{unresolvable}' in '{rel}'");
             }
 
-            foreach (var reference in CollectReferences(code))
+            foreach (var reference in CollectReferences(source))
             {
                 if (reference.StartsWith("@", StringComparison.Ordinal))
                 {
@@ -159,13 +147,6 @@ internal static class TemplateScanner
                     continue; // injected by the client at render time
                 }
 
-                if (Directory.Exists(ToFullPath(root, resolved)))
-                {
-                    // Near-certainly the literal prefix of a path assembled at
-                    // runtime; a directory is never a Typst reference target.
-                    continue;
-                }
-
                 if (!File.Exists(ToFullPath(root, resolved)))
                 {
                     throw new FileNotFoundException(
@@ -181,16 +162,21 @@ internal static class TemplateScanner
     }
 
     /// <summary>
-    /// Normalizes a root-relative entry path and rejects one that tries to climb
-    /// out of the root — otherwise <c>../../etc/passwd</c> would be scanned, and
-    /// enumerating outside the root corrupts every relative path derived from it.
+    /// Normalizes a root-relative entry path and rejects rooted paths or paths
+    /// that try to climb out of the root.
     /// </summary>
     public static string NormalizeEntry(string? entry)
     {
-        var rel = entry is null ? string.Empty : NormalizeSlashes(entry).TrimStart('/');
-        if (rel.Length == 0)
+        if (entry is null || string.IsNullOrWhiteSpace(entry))
         {
             throw new ArgumentException("Entry must name a .typ file inside the template root.", nameof(entry));
+        }
+
+        var rel = NormalizeSlashes(entry);
+        if (rel.StartsWith("/", StringComparison.Ordinal) || IsDriveQualified(rel))
+        {
+            throw new ArgumentException(
+                $"Entry '{entry}' must be relative to the template root.", nameof(entry));
         }
 
         foreach (var segment in rel.Split('/'))
@@ -206,13 +192,14 @@ internal static class TemplateScanner
     }
 
     /// <summary>
-    /// Blanks comments and raw blocks while leaving string literals intact, in a
-    /// single left-to-right pass. Doing this with independent regexes let a
-    /// <c>"/*"</c> or a <c>"//"</c> inside a string consume the code after it.
+    /// Masks comments and raw blocks without changing source positions or line
+    /// breaks. Strings are skipped intact so comment delimiters inside them do
+    /// not hide later imports.
     /// </summary>
-    private static string StripCommentsAndRawBlocks(string source)
+    private static PreparedSource PrepareSource(string source)
     {
-        var sb = new StringBuilder(source.Length);
+        var masked = source.ToCharArray();
+        var stringPositions = new bool[source.Length];
         var i = 0;
 
         while (i < source.Length)
@@ -221,88 +208,73 @@ internal static class TemplateScanner
 
             if (c == '"')
             {
-                i = CopyStringLiteral(source, i, sb);
+                var end = SkipStringLiteral(source, i);
+                for (var j = i; j < end; j++)
+                {
+                    stringPositions[j] = true;
+                }
+
+                i = end;
             }
             else if (c == '/' && Peek(source, i + 1) == '/')
             {
-                i = SkipToEndOfLine(source, i);
+                var end = source.IndexOf('\n', i);
+                end = end < 0 ? source.Length : end;
+                Mask(masked, i, end);
+                i = end;
             }
             else if (c == '/' && Peek(source, i + 1) == '*')
             {
-                i = SkipBlockComment(source, i);
-                sb.Append(' ');
+                var end = FindBlockCommentEnd(source, i);
+                Mask(masked, i, end);
+                i = end;
             }
             else if (c == '`')
             {
-                i = SkipRaw(source, i);
-                sb.Append(' ');
+                var end = FindRawBlockEnd(source, i);
+                Mask(masked, i, end);
+                i = end;
             }
             else
             {
-                sb.Append(c);
                 i++;
             }
         }
 
-        return sb.ToString();
+        return new PreparedSource(new string(masked), stringPositions);
     }
 
-    /// <summary>
-    /// Copies a <c>"..."</c> literal verbatim, honouring backslash escapes. An
-    /// unterminated literal stops at the line break rather than running on into
-    /// the next statement.
-    /// </summary>
-    private static int CopyStringLiteral(string source, int start, StringBuilder sb)
+    private static int SkipStringLiteral(string source, int start)
     {
-        sb.Append('"');
         var i = start + 1;
-
         while (i < source.Length)
         {
             var c = source[i];
             if (c == '\\' && i + 1 < source.Length)
             {
-                sb.Append(c).Append(source[i + 1]);
                 i += 2;
-                continue;
             }
-
-            if (c == '\r' || c == '\n')
+            else if (c == '"')
             {
-                sb.Append('"'); // close it so the reference regexes cannot span lines
-                return i;
+                return i + 1;
             }
-
-            sb.Append(c);
-            i++;
-
-            if (c == '"')
+            else if (c is '\r' or '\n')
             {
                 return i;
             }
-        }
-
-        sb.Append('"');
-        return i;
-    }
-
-    private static int SkipToEndOfLine(string source, int start)
-    {
-        var i = start;
-        while (i < source.Length && source[i] != '\n')
-        {
-            i++;
+            else
+            {
+                i++;
+            }
         }
 
         return i;
     }
 
-    /// <summary>Skips a <c>/* ... */</c> comment; Typst nests them.</summary>
-    private static int SkipBlockComment(string source, int start)
+    private static int FindBlockCommentEnd(string source, int start)
     {
         var i = start + 2;
         var depth = 1;
-
         while (i < source.Length && depth > 0)
         {
             if (source[i] == '/' && Peek(source, i + 1) == '*')
@@ -324,12 +296,7 @@ internal static class TemplateScanner
         return i;
     }
 
-    /// <summary>
-    /// Skips a raw block — <c>`inline`</c> or a fenced <c>```…```</c>. Its
-    /// content is verbatim text, so a documentation page showing
-    /// <c>#include &lt;stdio.h&gt;</c> must not be read as a dependency.
-    /// </summary>
-    private static int SkipRaw(string source, int start)
+    private static int FindRawBlockEnd(string source, int start)
     {
         var fence = 0;
         while (start + fence < source.Length && source[start + fence] == '`')
@@ -344,33 +311,65 @@ internal static class TemplateScanner
 
     private static char Peek(string source, int index) => index < source.Length ? source[index] : '\0';
 
+    private static void Mask(char[] chars, int start, int end)
+    {
+        for (var i = start; i < end; i++)
+        {
+            if (chars[i] is not '\r' and not '\n')
+            {
+                chars[i] = ' ';
+            }
+        }
+    }
+
     /// <summary>
     /// The first <c>#import</c>/<c>#include</c> whose path cannot be resolved
     /// statically, or <c>null</c> when every one of them is a plain literal.
     /// </summary>
-    private static string? FirstUnresolvableImport(string code)
+    private static string? FirstUnresolvableImport(PreparedSource source)
     {
-        var dynamic = DynamicImport.Match(code);
-        if (dynamic.Success)
+        var dynamic = FirstCodeMatch(DynamicImport, source);
+        if (dynamic is not null)
         {
             return dynamic.Value.Trim();
         }
 
-        var concatenated = ConcatenatedImport.Match(code);
-        return concatenated.Success ? concatenated.Value.Trim() : null;
+        var concatenated = FirstCodeMatch(ConcatenatedImport, source);
+        return concatenated?.Value.Trim();
     }
 
-    private static IEnumerable<string> CollectReferences(string code)
+    private static Match? FirstCodeMatch(Regex regex, PreparedSource source)
     {
-        foreach (Match m in LiteralImport.Matches(code))
+        foreach (Match match in regex.Matches(source.Text))
         {
-            yield return m.Groups[1].Value;
+            if (!source.StringPositions[match.Index])
+            {
+                return match;
+            }
         }
 
-        foreach (Match m in LiteralReader.Matches(code))
+        return null;
+    }
+
+    private static IEnumerable<string> CollectReferences(PreparedSource source)
+    {
+        foreach (var regex in new[] { LiteralImport, LiteralReader })
         {
-            yield return m.Groups[1].Value;
+            foreach (Match match in regex.Matches(source.Text))
+            {
+                if (!source.StringPositions[match.Index])
+                {
+                    yield return match.Groups[1].Value;
+                }
+            }
         }
+    }
+
+    private sealed class PreparedSource(string text, bool[] stringPositions)
+    {
+        public string Text { get; } = text;
+
+        public bool[] StringPositions { get; } = stringPositions;
     }
 
     private static void IncludeSubtree(string root, string dirRel, Action<string> include)
@@ -391,17 +390,11 @@ internal static class TemplateScanner
 
     private static IEnumerable<string> EnumerateRelative(string root, string dir)
     {
-        var prefix = root + Path.DirectorySeparatorChar;
         foreach (var path in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
         {
-            // A directory symlink can lead outside the root, and a path that is
-            // not under it has no meaningful root-relative form.
-            if (!path.StartsWith(prefix, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            yield return NormalizeSlashes(path.Substring(prefix.Length));
+            var rel = path.Substring(root.Length)
+                .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            yield return NormalizeSlashes(rel);
         }
     }
 
@@ -413,8 +406,14 @@ internal static class TemplateScanner
     private static string? ResolveAgainstRoot(string baseDirRel, string reference)
     {
         reference = NormalizeSlashes(reference);
+        var rootRelativeReference = reference.TrimStart('/');
+        if (reference.StartsWith("//", StringComparison.Ordinal) || IsDriveQualified(rootRelativeReference))
+        {
+            return null;
+        }
+
         var combined = reference.StartsWith("/", StringComparison.Ordinal)
-            ? reference.TrimStart('/')
+            ? rootRelativeReference
             : baseDirRel.Length == 0 ? reference : baseDirRel + "/" + reference;
 
         var parts = new List<string>();
@@ -454,8 +453,8 @@ internal static class TemplateScanner
 
     private static string NormalizeSlashes(string path) => path.Replace('\\', '/');
 
-    private static string TrimTrailingSeparator(string path)
-        => path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    private static bool IsDriveQualified(string path)
+        => path.Length >= 2 && char.IsLetter(path[0]) && path[1] == ':';
 }
 
 /// <summary>Outcome of a <see cref="TemplateScanner.Scan"/>.</summary>

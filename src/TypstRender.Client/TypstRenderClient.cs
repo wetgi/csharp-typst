@@ -107,11 +107,10 @@ public sealed class TypstRenderClient : ITypstRenderClient
             throw new ArgumentNullException(nameof(request));
         }
 
+        var entry = TemplateScanner.NormalizeEntry(request.Entry);
         var endpoint = _renderEndpoint ?? throw new InvalidOperationException(
             $"No render service address configured. Set {nameof(TypstRenderClientOptions)}."
                 + $"{nameof(TypstRenderClientOptions.BaseAddress)}.");
-
-        var entry = TemplateScanner.NormalizeEntry(request.Entry);
         var dataJson = request.Data is null
             ? null
             : JsonSerializer.SerializeToUtf8Bytes(request.Data, JsonOptions);
@@ -132,7 +131,11 @@ public sealed class TypstRenderClient : ITypstRenderClient
 
         if (!response.IsSuccessStatusCode)
         {
+#if NET5_0_OR_GREATER
+            var detail = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+#else
             var detail = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+#endif
             response.Dispose();
             var message = $"Typst render failed with status {(int)response.StatusCode}.";
             throw new TypstRenderException((int)response.StatusCode, message, string.IsNullOrWhiteSpace(detail) ? null : detail);

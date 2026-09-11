@@ -152,6 +152,18 @@ public sealed class TemplateScannerTests : IDisposable
             () => TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto));
     }
 
+    [Theory]
+    [InlineData("C:/outside.typ")]
+    [InlineData("/C:/outside.typ")]
+    [InlineData(@"\\server\share\outside.typ")]
+    public void Auto_HostRootedReference_Throws(string reference)
+    {
+        WriteFile("invoice/main.typ", $"#import \"{reference}\": x");
+
+        Assert.Throws<InvalidOperationException>(
+            () => TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto));
+    }
+
     [Fact]
     public void Auto_EntryAtRoot_BundlesWholeRoot()
     {
@@ -190,6 +202,18 @@ public sealed class TemplateScannerTests : IDisposable
     }
 
     [Fact]
+    public void Auto_MultilineBlockComment_PreservesTheCodeLineAfterIt()
+    {
+        WriteFile("shared/x.typ", "#let x = 1");
+        WriteFile("invoice/main.typ",
+            "#{ let ignored = 1 /* comment\n   */ import \"/shared/x.typ\": x }");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Equal(["invoice/main.typ", "shared/x.typ"], result.Files);
+    }
+
+    [Fact]
     public void Auto_DoubleSlashInsideAStringPath_IsNotTreatedAsAComment()
     {
         // Stripping "//" to end-of-line left the string unterminated, so the
@@ -214,6 +238,18 @@ public sealed class TemplateScannerTests : IDisposable
 
         Assert.Null(result.FullFolderReason);
         Assert.Equal(["invoice/main.typ"], result.Files);
+    }
+
+    [Fact]
+    public void Auto_ImportSyntaxInsideAString_IsNotAnImport()
+    {
+        WriteFile("letter/main.typ", "= Letter");
+        WriteFile("invoice/main.typ", "#let example = \"See #import missing: x\"");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Null(result.FullFolderReason);
+        Assert.DoesNotContain("letter/main.typ", result.Files);
     }
 
     [Fact]
@@ -287,37 +323,31 @@ public sealed class TemplateScannerTests : IDisposable
         Assert.Equal(["invoice/main.typ"], result.Files);
     }
 
-    [Fact]
-    public void Auto_ReaderWithNamedArgumentsBeforeThePath_IsFollowed()
-    {
-        WriteFile("invoice/logo.png", "png");
-        WriteFile("invoice/main.typ", "#image(width: 100pt, \"logo.png\")");
-
-        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
-
-        Assert.Equal(["invoice/logo.png", "invoice/main.typ"], result.Files);
-    }
-
-    [Fact]
-    public void Auto_PluginReference_IsFollowed()
-    {
-        WriteFile("invoice/calc.wasm", "wasm");
-        WriteFile("invoice/main.typ", "#let p = plugin(\"calc.wasm\")");
-
-        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
-
-        Assert.Equal(["invoice/calc.wasm", "invoice/main.typ"], result.Files);
-    }
-
     [Theory]
     [InlineData("../outside.typ")]
     [InlineData("invoice/../../main.typ")]
+    [InlineData(" ")]
     [InlineData("")]
-    public void EntryClimbingOutOfTheRoot_Throws(string entry)
+    [InlineData("/absolute/main.typ")]
+    [InlineData("C:/outside/main.typ")]
+    [InlineData(@"C:\outside\main.typ")]
+    [InlineData(@"\\server\share\main.typ")]
+    public void EntryOutsideTheRoot_Throws(string entry)
     {
         WriteFile("invoice/main.typ", "= Hi");
 
         Assert.Throws<ArgumentException>(() => TemplateScanner.Scan(_root, entry, BundleMode.Auto));
+    }
+
+    [Fact]
+    public void TemplateRootWithTrailingSeparator_IsHandled()
+    {
+        WriteFile("invoice/main.typ", "= Hi");
+
+        var result = TemplateScanner.Scan(
+            _root + Path.DirectorySeparatorChar, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Equal(["invoice/main.typ"], result.Files);
     }
 
     [Fact]

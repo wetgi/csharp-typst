@@ -69,7 +69,7 @@ public sealed class BundleExtractorTests : IDisposable
     }
 
     [Fact]
-    public async Task Extract_MoreFilesThanTheLimit_IsRejected()
+    public async Task Extract_MoreEntriesThanTheLimit_IsRejected()
     {
         using var zip = Zip(("a.typ", "a"), ("b.typ", "b"), ("c.typ", "c"));
 
@@ -77,7 +77,19 @@ public sealed class BundleExtractorTests : IDisposable
             zip, _dest, new BundleExtractor.Limits(MaxEntries: 2, MaxExtractedBytes: 1024 * 1024), default);
 
         Assert.NotNull(error);
-        Assert.Contains("more than 2 files", error, StringComparison.Ordinal);
+        Assert.Contains("more than 2 entries", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Extract_DirectoryRecordsCountTowardTheEntryLimit()
+    {
+        using var zip = Zip(("a/", ""), ("b/", ""), ("c/", ""));
+
+        var error = await BundleExtractor.ExtractAsync(
+            zip, _dest, new BundleExtractor.Limits(MaxEntries: 2, MaxExtractedBytes: 1024), default);
+
+        Assert.NotNull(error);
+        Assert.Contains("more than 2 entries", error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -103,6 +115,58 @@ public sealed class BundleExtractorTests : IDisposable
         var error = await BundleExtractor.ExtractAsync(zip, _dest, Generous, default);
 
         Assert.NotNull(error);
+    }
+
+    [Fact]
+    public async Task Extract_NormalizedDuplicateTarget_IsRejected()
+    {
+        using var zip = Zip(("main.typ", "first"), ("folder/../main.typ", "second"));
+
+        var error = await BundleExtractor.ExtractAsync(zip, _dest, Generous, default);
+
+        Assert.NotNull(error);
+        Assert.Contains("duplicate target", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Extract_HostFilesystemFailure_IsNotReportedAsInvalidInput()
+    {
+        File.WriteAllText(Path.Combine(_dest, "main.typ"), "already exists");
+        using var zip = Zip(("main.typ", "replacement"));
+
+        await Assert.ThrowsAsync<IOException>(
+            () => BundleExtractor.ExtractAsync(zip, _dest, Generous, default));
+    }
+
+    [Theory]
+    [InlineData("a/", "a", "conflicts with a directory")]
+    [InlineData("a", "a/", "conflicts with a file")]
+    [InlineData("a/b/", "a", "conflicts with a directory")]
+    [InlineData("a", "a/b/", "file where a directory is required")]
+    public async Task Extract_DirectoryAndFilePathClash_IsRejected(
+        string first, string second, string expectedError)
+    {
+        // GetFullPath preserves a directory record's trailing separator. Both
+        // exact and parent-path clashes must compare normalized targets.
+        using var zip = Zip((first, ""), (second, ""));
+
+        var error = await BundleExtractor.ExtractAsync(zip, _dest, Generous, default);
+
+        Assert.NotNull(error);
+        Assert.Contains(expectedError, error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Extract_CurrentDirectoryRecord_IsNotTreatedAsAnEscape()
+    {
+        // Some archivers emit a './' record for the root; trimming its
+        // separator before the zip-slip check would read it as escaping.
+        using var zip = Zip(("./", ""), ("main.typ", "hi"));
+
+        var error = await BundleExtractor.ExtractAsync(zip, _dest, Generous, default);
+
+        Assert.Null(error);
+        Assert.Equal("hi", File.ReadAllText(Path.Combine(_dest, "main.typ")));
     }
 
     [Fact]
