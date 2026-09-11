@@ -20,6 +20,7 @@ public sealed class TypstRenderClient : ITypstRenderClient
 
     private readonly HttpClient _http;
     private readonly TypstRenderClientOptions _options;
+    private readonly Uri? _renderEndpoint;
 
     /// <summary>Creates a client over the given <see cref="HttpClient"/> and options.</summary>
     public TypstRenderClient(HttpClient http, IOptions<TypstRenderClientOptions> options)
@@ -27,22 +28,20 @@ public sealed class TypstRenderClient : ITypstRenderClient
         _http = http;
         _options = options.Value;
 
-        if (_options.BaseAddress is not null)
-        {
-            _http.BaseAddress = EnsureTrailingSlash(_options.BaseAddress);
-        }
-        else if (_http.BaseAddress is not null)
-        {
-            _http.BaseAddress = EnsureTrailingSlash(_http.BaseAddress);
-        }
+        // The injected HttpClient is left untouched: assigning BaseAddress on a
+        // client that has already sent a request throws, so constructing over a
+        // shared or static HttpClient used to fail unpredictably.
+        var baseAddress = _options.BaseAddress ?? _http.BaseAddress;
+        _renderEndpoint = baseAddress is null ? null : BuildRenderEndpoint(baseAddress);
     }
 
     /// <inheritdoc />
-    public Task<byte[]> RenderAsync(
-        string entry,
-        object? data = null,
-        CancellationToken cancellationToken = default)
+    public Task<byte[]> RenderAsync(string entry, object? data, CancellationToken cancellationToken = default)
         => RenderAsync(new TypstRenderRequest { Entry = entry, Data = data }, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<byte[]> RenderAsync(string entry, CancellationToken cancellationToken = default)
+        => RenderAsync(entry, data: null, cancellationToken);
 
     /// <inheritdoc />
     public async Task<byte[]> RenderAsync(
@@ -52,15 +51,21 @@ public sealed class TypstRenderClient : ITypstRenderClient
         using var response = await SendRenderAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken)
             .ConfigureAwait(false);
 
+#if NET5_0_OR_GREATER
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+#else
         return await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+#endif
     }
 
     /// <inheritdoc />
     public Task<Stream> RenderToStreamAsync(
-        string entry,
-        object? data = null,
-        CancellationToken cancellationToken = default)
+        string entry, object? data, CancellationToken cancellationToken = default)
         => RenderToStreamAsync(new TypstRenderRequest { Entry = entry, Data = data }, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<Stream> RenderToStreamAsync(string entry, CancellationToken cancellationToken = default)
+        => RenderToStreamAsync(entry, data: null, cancellationToken);
 
     /// <inheritdoc />
     public async Task<Stream> RenderToStreamAsync(
@@ -74,7 +79,11 @@ public sealed class TypstRenderClient : ITypstRenderClient
 
         try
         {
+#if NET5_0_OR_GREATER
+            var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+#else
             var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+#endif
             return new ResponseStream(stream, response);
         }
         catch
@@ -98,12 +107,10 @@ public sealed class TypstRenderClient : ITypstRenderClient
             throw new ArgumentNullException(nameof(request));
         }
 
-        if (string.IsNullOrWhiteSpace(request.Entry))
-        {
-            throw new ArgumentException("Entry must name a .typ file inside the bundle.", nameof(request));
-        }
-
-        var entry = request.Entry.Replace('\\', '/').TrimStart('/');
+        var entry = TemplateScanner.NormalizeEntry(request.Entry);
+        var endpoint = _renderEndpoint ?? throw new InvalidOperationException(
+            $"No render service address configured. Set {nameof(TypstRenderClientOptions)}."
+                + $"{nameof(TypstRenderClientOptions.BaseAddress)}.");
         var dataJson = request.Data is null
             ? null
             : JsonSerializer.SerializeToUtf8Bytes(request.Data, JsonOptions);
@@ -116,19 +123,19 @@ public sealed class TypstRenderClient : ITypstRenderClient
         using var content = new ByteArrayContent(zipBytes);
         content.Headers.ContentType = new MediaTypeHeaderValue(RenderProtocol.BundleContentType);
 
-        using var httpRequest = new HttpRequestMessage(
-            HttpMethod.Post,
-            RenderProtocol.RenderPath.TrimStart('/') + BuildQuery(entry, dataJson is not null, request.Inputs))
-        {
-            Content = content,
-        };
+        var requestUri = new Uri(endpoint.AbsoluteUri + BuildQuery(entry, dataJson is not null, request.Inputs));
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = content };
 
         var response = await _http.SendAsync(httpRequest, completionOption, cancellationToken)
             .ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
+#if NET5_0_OR_GREATER
+            var detail = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+#else
             var detail = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+#endif
             response.Dispose();
             var message = $"Typst render failed with status {(int)response.StatusCode}.";
             throw new TypstRenderException((int)response.StatusCode, message, string.IsNullOrWhiteSpace(detail) ? null : detail);
@@ -169,10 +176,7 @@ public sealed class TypstRenderClient : ITypstRenderClient
     public TemplateManifest GetBundleManifest(
         string entry, BundleMode? bundleMode = null, IEnumerable<string>? extraFiles = null)
     {
-        if (string.IsNullOrWhiteSpace(entry))
-        {
-            throw new ArgumentException("Entry must name a .typ file inside the template root.", nameof(entry));
-        }
+        var entryRel = TemplateScanner.NormalizeEntry(entry);
 
         var root = _options.TemplateRoot
             ?? throw new InvalidOperationException(
@@ -186,8 +190,7 @@ public sealed class TypstRenderClient : ITypstRenderClient
         var extraPaths = extraFiles?
             .Select(p => p.Replace('\\', '/').TrimStart('/'))
             .ToList();
-        var scan = TemplateScanner.Scan(
-            root, entry.Replace('\\', '/').TrimStart('/'), bundleMode ?? _options.BundleMode, extraPaths);
+        var scan = TemplateScanner.Scan(root, entryRel, bundleMode ?? _options.BundleMode, extraPaths);
         return new TemplateManifest(scan.Files, scan.FullFolderReason);
     }
 
@@ -351,10 +354,39 @@ public sealed class TypstRenderClient : ITypstRenderClient
         WriteEntry(archive, path, content);
     }
 
-    private static Uri EnsureTrailingSlash(Uri uri)
-        => uri.AbsolutePath.EndsWith("/", StringComparison.Ordinal)
-            ? uri
-            : new Uri(uri.AbsoluteUri + "/", UriKind.Absolute);
+    /// <summary>
+    /// Resolves the absolute <c>POST /render</c> URI once, so no request has to
+    /// rely on relative-URI resolution against a mutable
+    /// <see cref="HttpClient.BaseAddress"/>.
+    /// </summary>
+    private static Uri BuildRenderEndpoint(Uri baseAddress)
+    {
+        if (!baseAddress.IsAbsoluteUri)
+        {
+            throw new ArgumentException(
+                $"{nameof(TypstRenderClientOptions)}.{nameof(TypstRenderClientOptions.BaseAddress)} "
+                    + $"must be an absolute URI, e.g. new Uri(\"http://localhost:8080\"); got '{baseAddress}'.",
+                nameof(baseAddress));
+        }
+
+        if (!string.IsNullOrEmpty(baseAddress.Query) || !string.IsNullOrEmpty(baseAddress.Fragment))
+        {
+            throw new ArgumentException(
+                $"{nameof(TypstRenderClientOptions)}.{nameof(TypstRenderClientOptions.BaseAddress)} "
+                    + $"must not carry a query string or fragment; got '{baseAddress}'.",
+                nameof(baseAddress));
+        }
+
+        // GetLeftPart, not AbsoluteUri: appending to the latter would put the
+        // separator after a query string and silently drop the path prefix.
+        var path = baseAddress.GetLeftPart(UriPartial.Path);
+        if (!path.EndsWith("/", StringComparison.Ordinal))
+        {
+            path += "/";
+        }
+
+        return new Uri(path + RenderProtocol.RenderPath.TrimStart('/'), UriKind.Absolute);
+    }
 
     /// <summary>
     /// Read-only stream over an HTTP response body that disposes the owning

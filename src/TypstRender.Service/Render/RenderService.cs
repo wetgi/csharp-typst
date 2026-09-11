@@ -60,7 +60,11 @@ public sealed class RenderService : IDisposable
             await body.CopyToAsync(bundle, ct);
             bundle.Position = 0;
 
-            var extractError = BundleExtractor.Extract(bundle, workDir);
+            var extractError = await BundleExtractor.ExtractAsync(
+                bundle,
+                workDir,
+                new BundleExtractor.Limits(_options.MaxBundleEntries, _options.MaxExtractedBytes),
+                ct);
             if (extractError is not null)
             {
                 return Log(sw, entry, new RenderOutcome(StatusCodes.Status400BadRequest, null, $"invalid bundle: {extractError}"));

@@ -76,9 +76,15 @@ public sealed class TypstRunner(IOptions<RenderOptions> options, ILogger<TypstRu
         catch (OperationCanceledException)
         {
             TryKill(process);
-            // A timeout cancels timeoutCts; a shutdown/abort cancels the caller's ct.
-            var partialStderr = await DrainAsync(stderrTask);
-            return new TypstRun(null, partialStderr.Trim(), TimedOut: !ct.IsCancellationRequested, StartFailed: false);
+            _ = await DrainAsync(stderrTask);
+
+            // A timeout cancels timeoutCts; a client disconnect or a shutdown
+            // cancels the caller's ct. The latter is nobody's compile error:
+            // reporting it as one produced a 422 with a partial stderr and made
+            // the 422 rate meaningless, so let the cancellation travel instead.
+            ct.ThrowIfCancellationRequested();
+
+            return new TypstRun(null, string.Empty, TimedOut: true, StartFailed: false);
         }
 
         var stderr = (await DrainAsync(stderrTask)).Trim();
@@ -93,6 +99,10 @@ public sealed class TypstRunner(IOptions<RenderOptions> options, ILogger<TypstRu
         {
             var pdf = await File.ReadAllBytesAsync(outputPath, ct);
             return new TypstRun(pdf, string.Empty, TimedOut: false, StartFailed: false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

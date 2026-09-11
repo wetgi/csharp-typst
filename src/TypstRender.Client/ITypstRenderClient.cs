@@ -15,10 +15,15 @@ public interface ITypstRenderClient
     /// <param name="data">Object serialized to <c>data.json</c>; <c>null</c> sends no data file.</param>
     /// <param name="cancellationToken">Token used to cancel the request.</param>
     /// <returns>The rendered PDF bytes.</returns>
-    Task<byte[]> RenderAsync(
-        string entry,
-        object? data = null,
-        CancellationToken cancellationToken = default);
+    Task<byte[]> RenderAsync(string entry, object? data, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Renders the template addressed by <paramref name="entry"/>, with no data file.
+    /// </summary>
+    /// <param name="entry">Entry <c>.typ</c> file, relative to the template root.</param>
+    /// <param name="cancellationToken">Token used to cancel the request.</param>
+    /// <returns>The rendered PDF bytes.</returns>
+    Task<byte[]> RenderAsync(string entry, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Renders with full control over root, bundling, extra inputs, or an in-memory
@@ -34,10 +39,13 @@ public interface ITypstRenderClient
     /// instead of buffering the whole document into a <c>byte[]</c>. Dispose the
     /// returned stream to release the underlying HTTP response.
     /// </summary>
-    Task<Stream> RenderToStreamAsync(
-        string entry,
-        object? data = null,
-        CancellationToken cancellationToken = default);
+    Task<Stream> RenderToStreamAsync(string entry, object? data, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Streaming counterpart of <see cref="RenderAsync(string, CancellationToken)"/>.
+    /// Dispose the returned stream to release the underlying HTTP response.
+    /// </summary>
+    Task<Stream> RenderToStreamAsync(string entry, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Streaming counterpart of <see cref="RenderAsync(TypstRenderRequest, CancellationToken)"/>.
@@ -73,8 +81,8 @@ public interface ITypstRenderClient
     /// A reference that does not exist on disk fails here with the chain of files
     /// that led to it, rather than as an opaque server error after a round-trip.
     /// Throws <see cref="System.ArgumentException"/> when <paramref name="entry"/>
-    /// is blank, <see cref="System.InvalidOperationException"/> when no template
-    /// root is configured, and <see cref="System.IO.DirectoryNotFoundException"/>
+    /// is blank, rooted, or climbs out of the root, <see cref="System.InvalidOperationException"/>
+    /// when no template root is configured, and <see cref="System.IO.DirectoryNotFoundException"/>
     /// when the configured root does not exist on disk — note this differs from
     /// <see cref="GetTemplates"/>, which returns an empty list for a missing root.
     /// </summary>

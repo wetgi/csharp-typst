@@ -23,6 +23,19 @@ public sealed class RenderEndpointTests : IClassFixture<WebApplicationFactory<Pr
         $"{RenderProtocol.RenderPath}?{RenderProtocol.EntryQueryParam}=main.typ" +
         $"&{RenderProtocol.InputQueryParam}={Uri.EscapeDataString(RenderProtocol.DataPathInputKey + "=/" + RenderProtocol.DataFileName)}";
 
+    /// <summary>
+    /// A factory with <c>Render</c> settings overridden, so limit behaviour can
+    /// be exercised without waiting for the production defaults.
+    /// </summary>
+    private WebApplicationFactory<Program> WithSettings(params (string Key, string Value)[] settings)
+        => _factory.WithWebHostBuilder(builder =>
+        {
+            foreach (var (key, value) in settings)
+            {
+                builder.UseSetting(key, value);
+            }
+        });
+
     [Fact]
     public async Task Health_ReturnsOk()
     {
@@ -89,6 +102,72 @@ public sealed class RenderEndpointTests : IClassFixture<WebApplicationFactory<Pr
         using var response = await client.PostAsync(RenderUrl, content);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Render_EntryNameCollidingWithADirectory_Returns400NotAServerError()
+    {
+        // A zip carrying both a file "a" and a file "a/b" makes the second
+        // CreateDirectory throw IOException; that used to surface as a 500.
+        using var client = _factory.CreateClient();
+        using var ms = new MemoryStream();
+        using (var archive = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var name in new[] { "a", "a/b" })
+            {
+                using var s = archive.CreateEntry(name).Open();
+                s.Write("x"u8);
+            }
+        }
+
+        using var content = ZipBytesContent(ms.ToArray());
+        using var response = await client.PostAsync(RenderUrl, content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Render_BundleOverTheEntryLimit_Returns400()
+    {
+        using var factory = WithSettings(("Render:MaxBundleEntries", "3"));
+        using var client = factory.CreateClient();
+        using var ms = new MemoryStream();
+        using (var archive = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                using var s = archive.CreateEntry($"f{i}.txt").Open();
+                s.Write("x"u8);
+            }
+        }
+
+        using var content = ZipBytesContent(ms.ToArray());
+        using var response = await client.PostAsync(RenderUrl, content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("more than 3 entries", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Render_BundleUnpackingBeyondTheByteBudget_Returns400()
+    {
+        // MaxUploadBytes caps only the compressed body: 1 MiB of zeros is a few
+        // hundred bytes zipped, and a real bomb expands a thousandfold.
+        using var factory = WithSettings(("Render:MaxExtractedBytes", "65536"));
+        using var client = factory.CreateClient();
+
+        using var ms = new MemoryStream();
+        using (var archive = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            using var s = archive.CreateEntry("main.typ", CompressionLevel.Optimal).Open();
+            s.Write(new byte[1024 * 1024]);
+        }
+
+        using var content = ZipBytesContent(ms.ToArray());
+        using var response = await client.PostAsync(RenderUrl, content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("unpacks to more than", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     private static ByteArrayContent ZipContent(Dictionary<string, string> files)

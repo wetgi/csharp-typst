@@ -152,6 +152,18 @@ public sealed class TemplateScannerTests : IDisposable
             () => TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto));
     }
 
+    [Theory]
+    [InlineData("C:/outside.typ")]
+    [InlineData("/C:/outside.typ")]
+    [InlineData(@"\\server\share\outside.typ")]
+    public void Auto_HostRootedReference_Throws(string reference)
+    {
+        WriteFile("invoice/main.typ", $"#import \"{reference}\": x");
+
+        Assert.Throws<InvalidOperationException>(
+            () => TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto));
+    }
+
     [Fact]
     public void Auto_EntryAtRoot_BundlesWholeRoot()
     {
@@ -172,6 +184,170 @@ public sealed class TemplateScannerTests : IDisposable
         var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Full);
 
         Assert.Equal(["invoice/main.typ", "letter/main.typ"], result.Files);
+    }
+
+    [Fact]
+    public void Auto_BlockCommentDelimiterInsideAString_DoesNotSwallowTheImportAfterIt()
+    {
+        // The /* ... */ pre-strip used to run over raw source, so a "/*" inside a
+        // string literal deleted every statement up to the next "*/".
+        WriteFile("shared/x.typ", "#let x = 1");
+        WriteFile("invoice/main.typ",
+            "#let glob = \"/*\"\n#import \"/shared/x.typ\": x\n#let g2 = \"*/\"");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Null(result.FullFolderReason);
+        Assert.Equal(["invoice/main.typ", "shared/x.typ"], result.Files);
+    }
+
+    [Fact]
+    public void Auto_MultilineBlockComment_PreservesTheCodeLineAfterIt()
+    {
+        WriteFile("shared/x.typ", "#let x = 1");
+        WriteFile("invoice/main.typ",
+            "#{ let ignored = 1 /* comment\n   */ import \"/shared/x.typ\": x }");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Equal(["invoice/main.typ", "shared/x.typ"], result.Files);
+    }
+
+    [Fact]
+    public void Auto_DoubleSlashInsideAStringPath_IsNotTreatedAsAComment()
+    {
+        // Stripping "//" to end-of-line left the string unterminated, so the
+        // reference regex ran on into the next line and both assets were lost.
+        WriteFile("invoice/logo//v2.png", "png");
+        WriteFile("invoice/b.png", "png");
+        WriteFile("invoice/main.typ", "#image(\"logo//v2.png\")\n#image(\"b.png\")");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Null(result.FullFolderReason);
+        Assert.Contains("invoice/b.png", result.Files);
+    }
+
+    [Fact]
+    public void Auto_ProseContainingIncludeFollowedByAQuote_IsNotAnImport()
+    {
+        // "Prices include \"VAT\"" used to resolve to invoice/VAT and throw.
+        WriteFile("invoice/main.typ", "#text[Prices include \"VAT\" and shipping]");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Null(result.FullFolderReason);
+        Assert.Equal(["invoice/main.typ"], result.Files);
+    }
+
+    [Fact]
+    public void Auto_ImportSyntaxInsideAString_IsNotAnImport()
+    {
+        WriteFile("letter/main.typ", "= Letter");
+        WriteFile("invoice/main.typ", "#let example = \"See #import missing: x\"");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Null(result.FullFolderReason);
+        Assert.DoesNotContain("letter/main.typ", result.Files);
+    }
+
+    [Fact]
+    public void Auto_ImportInsideARawBlock_IsNotADependency()
+    {
+        // A documentation template showing code must not acquire its examples as
+        // dependencies — nor widen the bundle because of "#include <stdio.h>".
+        WriteFile("shared/x.typ", "#let x = 1");
+        WriteFile("docs/main.typ",
+            "#import \"/shared/x.typ\": x\n"
+            + "Such as `#import \"/shared/nope.typ\"` inline.\n"
+            + "```c\n#include <stdio.h>\n```\n");
+
+        var result = TemplateScanner.Scan(_root, "docs/main.typ", BundleMode.Auto);
+
+        Assert.Null(result.FullFolderReason);
+        Assert.Equal(["docs/main.typ", "shared/x.typ"], result.Files);
+    }
+
+    [Fact]
+    public void Auto_CodeModeDynamicImport_WidensToFullFolder()
+    {
+        // Typst allows a bare `import` in code mode; only "#import" used to be
+        // checked, so this silently produced an incomplete bundle.
+        WriteFile("invoice/main.typ", "#{\n  let m = \"/shared/x.typ\"\n  import m: *\n}");
+        WriteFile("shared/x.typ", "#let x = 1");
+        WriteFile("letter/main.typ", "= Letter");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.NotNull(result.FullFolderReason);
+        Assert.Contains("letter/main.typ", result.Files);
+    }
+
+    [Fact]
+    public void Auto_CodeModeLiteralImport_IsFollowed()
+    {
+        WriteFile("invoice/main.typ", "#{\n  import \"/shared/x.typ\": *\n}");
+        WriteFile("shared/x.typ", "#let x = 1");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Equal(["invoice/main.typ", "shared/x.typ"], result.Files);
+    }
+
+    [Fact]
+    public void Auto_ConcatenatedImportPath_WidensInsteadOfFailing()
+    {
+        // "/shared/" + n is a prefix, not a path. Treating it as one made the
+        // scanner throw on a perfectly valid template.
+        WriteFile("invoice/main.typ", "#let load(n) = { import \"/shared/\" + n + \".typ\": * }");
+        WriteFile("shared/x.typ", "#let x = 1");
+        WriteFile("letter/main.typ", "= Letter");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.NotNull(result.FullFolderReason);
+        Assert.Contains("letter/main.typ", result.Files);
+    }
+
+    [Fact]
+    public void Auto_ConcatenatedReaderPath_IsTolerated()
+    {
+        // A reader cannot pull in further references, so an unresolvable path is
+        // skipped rather than failing the render.
+        WriteFile("invoice/main.typ", "#let d = read(\"data/\" + name + \".csv\")");
+
+        var result = TemplateScanner.Scan(_root, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Null(result.FullFolderReason);
+        Assert.Equal(["invoice/main.typ"], result.Files);
+    }
+
+    [Theory]
+    [InlineData("../outside.typ")]
+    [InlineData("invoice/../../main.typ")]
+    [InlineData(" ")]
+    [InlineData("")]
+    [InlineData("/absolute/main.typ")]
+    [InlineData("C:/outside/main.typ")]
+    [InlineData(@"C:\outside\main.typ")]
+    [InlineData(@"\\server\share\main.typ")]
+    public void EntryOutsideTheRoot_Throws(string entry)
+    {
+        WriteFile("invoice/main.typ", "= Hi");
+
+        Assert.Throws<ArgumentException>(() => TemplateScanner.Scan(_root, entry, BundleMode.Auto));
+    }
+
+    [Fact]
+    public void TemplateRootWithTrailingSeparator_IsHandled()
+    {
+        WriteFile("invoice/main.typ", "= Hi");
+
+        var result = TemplateScanner.Scan(
+            _root + Path.DirectorySeparatorChar, "invoice/main.typ", BundleMode.Auto);
+
+        Assert.Equal(["invoice/main.typ"], result.Files);
     }
 
     [Fact]

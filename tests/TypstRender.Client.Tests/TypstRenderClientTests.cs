@@ -342,6 +342,87 @@ public sealed class TypstRenderClientTests : IDisposable
         Assert.Contains("letter/main.typ", manifest.Files);
     }
 
+    [Fact]
+    public async Task RenderAsync_EntryOnlyOverload_TreatsATokenAsATokenNotAsData()
+    {
+        // RenderAsync(entry, cancellationToken) used to bind the token to the
+        // `object? data` parameter, serializing the token into data.json and
+        // silently dropping cancellation.
+        WriteFile("letter/main.typ", "= Letter");
+        using var cts = new CancellationTokenSource();
+
+        await CreateClient().RenderAsync("letter/main.typ", cts.Token);
+
+        Assert.Equal("?entry=letter%2Fmain.typ", _handler.LastRequestUri!.Query);
+        Assert.DoesNotContain("data.json", ReadZip(_handler.LastBody!).Keys);
+    }
+
+    [Fact]
+    public async Task RenderAsync_EntryOnlyOverload_HonorsCancellation()
+    {
+        WriteFile("letter/main.typ", "= Letter");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => CreateClient().RenderAsync("letter/main.typ", cts.Token));
+    }
+
+    [Theory]
+    [InlineData("../outside/main.typ")]
+    [InlineData("invoice/../../main.typ")]
+    [InlineData(" ")]
+    [InlineData("")]
+    [InlineData("/absolute/main.typ")]
+    [InlineData("C:/outside/main.typ")]
+    public async Task RenderAsync_EntryEscapingTheRoot_Throws(string entry)
+        => await Assert.ThrowsAsync<ArgumentException>(() => CreateClient().RenderAsync(entry));
+
+    [Fact]
+    public async Task RenderAsync_WithoutBaseAddress_ThrowsNamingTheSetting()
+    {
+        WriteFile("letter/main.typ", "= Letter");
+        var client = CreateClient(o => o.BaseAddress = null);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.RenderAsync("letter/main.typ"));
+
+        Assert.Contains(nameof(TypstRenderClientOptions.BaseAddress), ex.Message);
+    }
+
+    [Theory]
+    [InlineData("http://typst-render.test/api?token=abc")]
+    [InlineData("http://typst-render.test/api#frag")]
+    public void Constructor_BaseAddressWithQueryOrFragment_Throws(string baseAddress)
+    {
+        // Appending to AbsoluteUri put the path separator after the query and
+        // silently dropped the /api prefix, producing a mystifying 404.
+        Assert.Throws<ArgumentException>(() => CreateClient(o => o.BaseAddress = new Uri(baseAddress)));
+    }
+
+    [Fact]
+    public void Constructor_RelativeBaseAddress_Throws()
+        => Assert.Throws<ArgumentException>(
+            () => CreateClient(o => o.BaseAddress = new Uri("/render", UriKind.Relative)));
+
+    [Fact]
+    public async Task Constructor_DoesNotMutateTheSuppliedHttpClient()
+    {
+        // A shared/static HttpClient that has already sent a request rejects a
+        // BaseAddress assignment, which used to make construction fail.
+        var http = new HttpClient(_handler);
+        using var content = new ByteArrayContent([]);
+        using var response = await http.PostAsync("http://typst-render.test/warmup", content);
+
+        _ = new TypstRenderClient(http, Options.Create(new TypstRenderClientOptions
+        {
+            BaseAddress = new Uri("http://typst-render.test"),
+            TemplateRoot = _root,
+        }));
+
+        Assert.Null(http.BaseAddress);
+    }
+
     private static Dictionary<string, string> ReadZip(byte[] zipBytes)
     {
         using var archive = new ZipArchive(new MemoryStream(zipBytes), ZipArchiveMode.Read);
@@ -372,6 +453,7 @@ public sealed class TypstRenderClientTests : IDisposable
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             LastRequestUri = request.RequestUri;
             LastBody = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
 

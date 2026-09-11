@@ -14,6 +14,21 @@ public sealed class RenderOptions
     /// <summary>Maximum accepted request body (the uploaded zip). Default 20 MB.</summary>
     public long MaxUploadBytes { get; set; } = 20L * 1024 * 1024;
 
+    /// <summary>
+    /// Maximum total size of the unpacked bundle. Default 200 MB.
+    /// <see cref="MaxUploadBytes"/> only caps the <em>compressed</em> upload, so
+    /// without this a well-formed 20 MB zip of highly compressible data unpacks
+    /// to tens of gigabytes while holding a concurrency slot.
+    /// </summary>
+    public long MaxExtractedBytes { get; set; } = 200L * 1024 * 1024;
+
+    /// <summary>
+    /// Maximum number of records in an uploaded zip. Default 2000 — a template
+    /// closure is tens of entries; anything near this is a malformed or hostile
+    /// bundle, not a document.
+    /// </summary>
+    public int MaxBundleEntries { get; set; } = 2000;
+
     /// <summary>Maximum concurrent typst compilations. <c>0</c> means the CPU count.</summary>
     public int MaxConcurrency { get; set; }
 
